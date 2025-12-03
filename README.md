@@ -1,6 +1,23 @@
-# Emask - Email Masking Service
+# MakeAnon - Email Masking Service
 
 A production-ready, privacy-focused email masking and forwarding service that allows users to create unlimited email aliases to protect their real email addresses from spam, data breaches, and unwanted tracking.
+
+## Live Service
+
+The service is live and available at:
+
+| Service | URL |
+|---------|-----|
+| **Web App** | https://makeanon.info |
+| **API** | https://api.makeanon.info |
+| **Health Check** | https://makeanon.info/api/v1/health |
+
+### Available Email Domains
+
+Create aliases using any of these domains:
+- `@makeanon.info` (default)
+- `@makeanon.xyz`
+- `@iamanon.lol`
 
 ## Features
 
@@ -58,7 +75,7 @@ A production-ready, privacy-focused email masking and forwarding service that al
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/emask.git
+git clone https://github.com/citizen-123/emask.git
 cd emask
 
 # Install dependencies
@@ -104,7 +121,7 @@ JWT_SECRET=your-super-secret-key-min-32-chars
 JWT_EXPIRES_IN=7d
 
 # Email Domains (comma-separated)
-EMAIL_DOMAINS=mask.example.com,alias.example.com
+EMAIL_DOMAINS=makeanon.info,makeanon.xyz,iamanon.lol
 
 # SMTP for Receiving
 SMTP_PORT=25
@@ -153,7 +170,7 @@ Response:
   "data": {
     "id": "uuid",
     "alias": "abc12345",
-    "fullAddress": "abc12345@mask.example.com",
+    "fullAddress": "abc12345@makeanon.info",
     "destinationEmail": "your-real@email.com",
     "emailVerified": false,
     "isActive": true,
@@ -382,7 +399,7 @@ Set up webhooks to receive real-time notifications about email events.
   "timestamp": "2024-01-01T12:00:00.000Z",
   "data": {
     "aliasId": "uuid",
-    "alias": "abc12345@mask.example.com",
+    "alias": "abc12345@makeanon.info",
     "from": "sender@example.com",
     "subject": "Hello World"
   }

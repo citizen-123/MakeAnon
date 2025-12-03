@@ -117,7 +117,7 @@ export function requireAdmin(
  */
 export function generateToken(payload: { id: string; email: string; isAdmin: boolean }): string {
   const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
-  return jwt.sign(payload, JWT_SECRET, { expiresIn });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn } as jwt.SignOptions);
 }
 
 /**

@@ -1,0 +1,63 @@
+# Emask - Caddy Reverse Proxy Configuration
+# Automatic HTTPS via Let's Encrypt
+
+# Main website - makeanon.info
+makeanon.info {
+    # Reverse proxy to the Node.js application
+    reverse_proxy localhost:3000
+
+    # Enable compression
+    encode gzip zstd
+
+    # Security headers
+    header {
+        # HSTS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Prevent clickjacking
+        X-Frame-Options "DENY"
+        # XSS protection
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Remove server header
+        -Server
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/makeanon.info.log
+        format json
+    }
+}
+
+# API subdomain - api.makeanon.info
+api.makeanon.info {
+    # Reverse proxy to the Node.js application
+    reverse_proxy localhost:3000
+
+    # Enable compression
+    encode gzip zstd
+
+    # CORS headers for API
+    header {
+        Access-Control-Allow-Origin "*"
+        Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Authorization, Content-Type"
+        Access-Control-Max-Age "86400"
+        # Security headers
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
+
+    # Handle preflight OPTIONS requests
+    @options method OPTIONS
+    respond @options 204
+
+    # Logging
+    log {
+        output file /var/log/caddy/api.makeanon.info.log
+        format json
+    }
+}

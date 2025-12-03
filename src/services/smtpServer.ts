@@ -1,4 +1,4 @@
-import { SMTPServer, SMTPServerDataStream, SMTPServerSession } from 'smtp-server';
+import { SMTPServer, SMTPServerDataStream, SMTPServerSession, SMTPServerAddress } from 'smtp-server';
 import { simpleParser, ParsedMail } from 'mailparser';
 import prisma from './database';
 import { forwardEmail, sendReplyEmail } from './emailService';
@@ -12,6 +12,27 @@ let smtpServer: SMTPServer | null = null;
 const MAX_EMAIL_SIZE = parseInt(process.env.MAX_EMAIL_SIZE_BYTES || '26214400'); // 25MB
 const FORWARD_LIMIT_PER_MINUTE = parseInt(process.env.FORWARD_LIMIT_PER_MINUTE || '30');
 
+// Log level configuration: NONE, PRIVATE, PUBLIC, ALL
+type LogLevel = 'NONE' | 'PRIVATE' | 'PUBLIC' | 'ALL';
+const LOG_LEVEL: LogLevel = (process.env.LOG?.toUpperCase() as LogLevel) || 'ALL';
+
+/**
+ * Check if logging is enabled for the given alias privacy level
+ */
+function shouldLog(isPrivate: boolean | null): boolean {
+  switch (LOG_LEVEL) {
+    case 'NONE':
+      return false;
+    case 'PRIVATE':
+      return isPrivate === true;
+    case 'PUBLIC':
+      return isPrivate === false || isPrivate === null;
+    case 'ALL':
+    default:
+      return true;
+  }
+}
+
 interface AliasWithUser {
   id: string;
   alias: string;
@@ -19,6 +40,7 @@ interface AliasWithUser {
   destinationEmail: string;
   emailVerified: boolean;
   isActive: boolean;
+  isPrivate: boolean;
   replyEnabled: boolean;
   replyPrefix: string | null;
   userId: string | null;
@@ -49,6 +71,7 @@ async function lookupAlias(aliasName: string, domainName: string): Promise<Alias
       destinationEmail: true,
       emailVerified: true,
       isActive: true,
+      isPrivate: true,
       replyEnabled: true,
       replyPrefix: true,
       userId: true,
@@ -79,6 +102,7 @@ async function lookupAliasByReplyPrefix(replyPrefix: string): Promise<AliasWithU
       destinationEmail: true,
       emailVerified: true,
       isActive: true,
+      isPrivate: true,
       replyEnabled: true,
       replyPrefix: true,
       userId: true,
@@ -131,8 +155,9 @@ async function processEmail(
     const parsed: ParsedMail = await simpleParser(stream);
 
     // Get recipient addresses
-    const recipients = session.envelope.rcptTo.map((r) => r.address.toLowerCase());
-    const fromAddress = session.envelope.mailFrom?.address || parseEmailAddress(parsed.from?.text || '').email;
+    const recipients = session.envelope.rcptTo.map((r: SMTPServerAddress) => r.address.toLowerCase());
+    const mailFrom = session.envelope.mailFrom;
+    const fromAddress = (mailFrom && typeof mailFrom !== 'boolean' ? mailFrom.address : null) || parseEmailAddress(parsed.from?.text || '').email;
 
     logger.info(`Received email from ${fromAddress} to ${recipients.join(', ')}`);
 
@@ -158,27 +183,27 @@ async function processEmail(
 
       if (!alias) {
         logger.warn(`Alias not found: ${aliasName}@${domainName}`);
-        await logEmail(null, null, fromAddress, recipientAddress, parsed.subject || null, 'failed', 'Alias not found', Date.now() - startTime);
+        await logEmail(null, null, fromAddress, recipientAddress, parsed.subject || null, 'failed', null, 'Alias not found', Date.now() - startTime);
         continue;
       }
 
       // Check if alias is verified and active
       if (!alias.emailVerified) {
         logger.info(`Alias not verified: ${alias.fullAddress}`);
-        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', 'Alias not verified', Date.now() - startTime);
+        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Alias not verified', Date.now() - startTime);
         continue;
       }
 
       if (!alias.isActive) {
         logger.info(`Alias is inactive: ${alias.fullAddress}`);
-        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', 'Alias is inactive', Date.now() - startTime);
+        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Alias is inactive', Date.now() - startTime);
         continue;
       }
 
       // Check if sender is blocked
       if (isSenderBlocked(fromAddress, alias.blockedSenders)) {
         logger.info(`Sender blocked for ${alias.fullAddress}: ${fromAddress}`);
-        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', 'Sender is blocked', Date.now() - startTime);
+        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Sender is blocked', Date.now() - startTime);
 
         // Update blocked count
         await prisma.alias.update({
@@ -193,7 +218,7 @@ async function processEmail(
       const rateLimit = await checkRateLimit(`forward:${alias.id}`, FORWARD_LIMIT_PER_MINUTE, 60);
       if (!rateLimit.allowed) {
         logger.warn(`Rate limit exceeded for alias: ${alias.fullAddress}`);
-        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', 'Rate limit exceeded', Date.now() - startTime);
+        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Rate limit exceeded', Date.now() - startTime);
         continue;
       }
 
@@ -224,7 +249,7 @@ async function processEmail(
           },
         });
 
-        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'forwarded', undefined, processingTime, result.messageId);
+        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'forwarded', alias.isPrivate, undefined, processingTime, result.messageId);
 
         // Trigger webhook if user exists
         if (alias.userId) {
@@ -238,7 +263,7 @@ async function processEmail(
 
         logger.info(`Email forwarded: ${alias.fullAddress} -> ${alias.destinationEmail} (${processingTime}ms)`);
       } else {
-        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'failed', result.error, processingTime);
+        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'failed', alias.isPrivate, result.error, processingTime);
 
         if (alias.userId) {
           await triggerWebhooks(alias.userId, 'email.failed', {
@@ -273,20 +298,20 @@ async function handleReply(
 
   if (!alias) {
     logger.warn(`Reply alias not found: ${replyPrefix}`);
-    await logEmail(null, null, fromAddress, recipientAddress, parsed.subject || null, 'failed', 'Reply alias not found', Date.now() - startTime);
+    await logEmail(null, null, fromAddress, recipientAddress, parsed.subject || null, 'failed', null, 'Reply alias not found', Date.now() - startTime);
     return;
   }
 
   if (!alias.replyEnabled) {
     logger.info(`Reply not enabled for alias: ${alias.fullAddress}`);
-    await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', 'Reply not enabled', Date.now() - startTime);
+    await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Reply not enabled', Date.now() - startTime);
     return;
   }
 
   // Verify the sender is the alias owner
   if (fromAddress.toLowerCase() !== alias.destinationEmail.toLowerCase()) {
     logger.warn(`Reply sender mismatch: expected ${alias.destinationEmail}, got ${fromAddress}`);
-    await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', 'Reply sender mismatch', Date.now() - startTime);
+    await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Reply sender mismatch', Date.now() - startTime);
     return;
   }
 
@@ -296,7 +321,7 @@ async function handleReply(
 
   // TODO: Implement full reply tracking
   logger.info(`Reply handling not fully implemented yet for: ${alias.fullAddress}`);
-  await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'failed', 'Reply handling not fully implemented', Date.now() - startTime);
+  await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'failed', alias.isPrivate, 'Reply handling not fully implemented', Date.now() - startTime);
 }
 
 /**
@@ -309,10 +334,17 @@ async function logEmail(
   toAlias: string,
   subject: string | null,
   status: string,
+  isPrivate: boolean | null,
   error?: string,
   processingTime?: number,
   messageId?: string
 ): Promise<void> {
+  // Check if logging is enabled for this alias type
+  if (!shouldLog(isPrivate)) {
+    logger.debug(`Logging disabled for ${isPrivate ? 'private' : 'public'} alias (LOG=${LOG_LEVEL})`);
+    return;
+  }
+
   try {
     await prisma.emailLog.create({
       data: {
@@ -387,11 +419,6 @@ export function startSmtpServer(): SMTPServer {
       logger.debug(`SMTP connection closed from ${session.remoteAddress}`);
     },
 
-    // Error handling
-    onError(error) {
-      logger.error('SMTP server error:', error);
-    },
-
     // Banner
     banner: 'Emask Email Masking Service',
   });
@@ -401,7 +428,7 @@ export function startSmtpServer(): SMTPServer {
     logger.info(`Accepting mail for domains: ${domains.join(', ')}`);
   });
 
-  smtpServer.on('error', (error) => {
+  smtpServer.on('error', (error: Error) => {
     logger.error('SMTP server error:', error);
   });
 
@@ -418,13 +445,9 @@ export function stopSmtpServer(): Promise<void> {
       return;
     }
 
-    smtpServer.close((error) => {
-      if (error) {
-        reject(error);
-      } else {
-        logger.info('SMTP server stopped');
-        resolve();
-      }
+    smtpServer.close(() => {
+      logger.info('SMTP server stopped');
+      resolve();
     });
   });
 }
