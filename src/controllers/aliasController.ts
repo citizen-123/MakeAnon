@@ -22,7 +22,7 @@ const MAX_ALIASES_PER_EMAIL = parseInt(process.env.MAX_ALIASES_PER_EMAIL || '10'
 const MAX_ALIASES_PER_USER = parseInt(process.env.MAX_ALIASES_PER_USER || '100');
 const ALIAS_CREATION_LIMIT = parseInt(process.env.ALIAS_CREATION_LIMIT_PER_HOUR || '10');
 const ALLOW_CUSTOM_ALIASES = process.env.ALLOW_CUSTOM_ALIASES !== 'false';
-const REQUIRE_VERIFICATION = process.env.REQUIRE_EMAIL_VERIFICATION !== 'false';
+const REQUIRE_VERIFICATION = process.env.REQUIRE_EMAIL_VERIFICATION === 'true'; // Default to false
 const BLOCK_DISPOSABLE = process.env.BLOCK_DISPOSABLE_EMAILS === 'true';
 
 // ============================================================================
@@ -264,9 +264,33 @@ export async function getAliasByToken(req: Request, res: Response): Promise<void
       return;
     }
 
+    // Calculate scheduled deletion info
+    let scheduledDeletion: { date: string; reason: string } | null = null;
+
+    if (!alias.emailVerified) {
+      // Unverified aliases are deleted 72 hours after creation
+      const deletionDate = new Date(alias.createdAt);
+      deletionDate.setHours(deletionDate.getHours() + 72);
+      scheduledDeletion = {
+        date: deletionDate.toISOString(),
+        reason: 'Unverified alias (72 hours after creation)',
+      };
+    } else if (!alias.isActive && alias.disabledAt) {
+      // Disabled aliases are deleted 30 days after being disabled
+      const deletionDate = new Date(alias.disabledAt);
+      deletionDate.setDate(deletionDate.getDate() + 30);
+      scheduledDeletion = {
+        date: deletionDate.toISOString(),
+        reason: 'Disabled alias (30 days after disabling)',
+      };
+    }
+
     res.json({
       success: true,
-      data: alias,
+      data: {
+        ...alias,
+        scheduledDeletion,
+      },
     });
   } catch (error) {
     logger.error('Get alias by token error:', error);
@@ -297,6 +321,18 @@ export async function updateAliasByToken(req: Request, res: Response): Promise<v
       return;
     }
 
+    // Track disabledAt for auto-deletion scheduling
+    let disabledAt: Date | null | undefined = undefined;
+    if (isActive !== undefined) {
+      if (isActive === false && alias.isActive === true) {
+        // Being disabled - set disabledAt
+        disabledAt = new Date();
+      } else if (isActive === true && alias.isActive === false) {
+        // Being re-enabled - clear disabledAt
+        disabledAt = null;
+      }
+    }
+
     const updated = await prisma.alias.update({
       where: { id: alias.id },
       data: {
@@ -304,6 +340,7 @@ export async function updateAliasByToken(req: Request, res: Response): Promise<v
         ...(description !== undefined && { description }),
         ...(isActive !== undefined && { isActive }),
         ...(replyEnabled !== undefined && { replyEnabled }),
+        ...(disabledAt !== undefined && { disabledAt }),
       },
       include: {
         domain: { select: { id: true, domain: true } },

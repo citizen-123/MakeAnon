@@ -187,11 +187,22 @@ async function createAlias(e) {
             </div>
             <div class="detail-row">
                 <span class="detail-label">Status</span>
-                <span class="detail-value">${alias.emailVerified ? 'Active' : 'Pending Verification'}</span>
+                <span class="detail-value">
+                    <span class="alias-status ${alias.isActive ? 'status-active' : 'status-inactive'}">
+                        ${alias.isActive ? 'Active' : 'Pending Verification'}
+                    </span>
+                </span>
             </div>
             <p class="text-muted mt-3" style="font-size: 0.875rem;">
-                Please check your email to verify your address and get your management token.
+                ${alias.isActive
+                    ? 'Your alias is active! Check your email for the management token to manage this alias later.'
+                    : 'Please check your email to verify your address and get your management token.'}
             </p>
+            ${!alias.emailVerified ? `
+            <p class="text-muted" style="font-size: 0.75rem; color: #f59e0b;">
+                Note: Unverified aliases will be automatically deleted after 72 hours.
+            </p>
+            ` : ''}
         `;
         openModal(elements.successModal);
 
@@ -208,6 +219,18 @@ async function createAlias(e) {
     }
 }
 
+// Format date for display
+function formatDate(dateString) {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
 // Manage alias with token
 async function manageWithToken(e) {
     e.preventDefault();
@@ -222,8 +245,22 @@ async function manageWithToken(e) {
         const response = await api(`/manage/${token}`);
         const alias = response.data;
 
+        // Build deletion warning if scheduled
+        let deletionWarning = '';
+        if (alias.scheduledDeletion) {
+            const deletionDate = formatDate(alias.scheduledDeletion.date);
+            deletionWarning = `
+                <div class="deletion-warning" style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+                    <div style="color: #dc2626; font-weight: 600; margin-bottom: 4px;">Scheduled for Deletion</div>
+                    <div style="color: #7f1d1d; font-size: 0.875rem;">${alias.scheduledDeletion.reason}</div>
+                    <div style="color: #991b1b; font-size: 0.875rem; margin-top: 4px;">Will be deleted on: <strong>${deletionDate}</strong></div>
+                </div>
+            `;
+        }
+
         elements.tokenAliasDetails.classList.remove('hidden');
         elements.tokenAliasDetails.innerHTML = `
+            ${deletionWarning}
             <div class="detail-row">
                 <span class="detail-label">Alias Address</span>
                 <span class="detail-value">${alias.fullAddress || alias.alias}</span>
@@ -244,6 +281,20 @@ async function manageWithToken(e) {
                 <span class="detail-label">Verified</span>
                 <span class="detail-value">${alias.emailVerified ? 'Yes' : 'No'}</span>
             </div>
+            <div class="detail-row">
+                <span class="detail-label">Emails Forwarded</span>
+                <span class="detail-value" style="font-weight: 600; color: #4F46E5;">${alias.forwardCount || 0}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Created</span>
+                <span class="detail-value">${formatDate(alias.createdAt)}</span>
+            </div>
+            ${alias.lastForwardAt ? `
+            <div class="detail-row">
+                <span class="detail-label">Last Forward</span>
+                <span class="detail-value">${formatDate(alias.lastForwardAt)}</span>
+            </div>
+            ` : ''}
 
             <div class="mt-4" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                 <button class="btn ${alias.isActive ? 'btn-outline' : 'btn-success'}" id="toggleAliasBtn">

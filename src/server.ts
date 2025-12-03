@@ -78,6 +78,32 @@ async function main() {
           });
         }
 
+        // Delete unverified aliases after 72 hours
+        const unverifiedCutoff = new Date();
+        unverifiedCutoff.setHours(unverifiedCutoff.getHours() - 72);
+        const deletedUnverified = await prisma.alias.deleteMany({
+          where: {
+            emailVerified: false,
+            createdAt: { lt: unverifiedCutoff },
+          },
+        });
+        if (deletedUnverified.count > 0) {
+          logger.info(`Deleted ${deletedUnverified.count} unverified aliases (72H expiry)`);
+        }
+
+        // Delete disabled aliases after 30 days
+        const disabledCutoff = new Date();
+        disabledCutoff.setDate(disabledCutoff.getDate() - 30);
+        const deletedDisabled = await prisma.alias.deleteMany({
+          where: {
+            isActive: false,
+            disabledAt: { lt: disabledCutoff },
+          },
+        });
+        if (deletedDisabled.count > 0) {
+          logger.info(`Deleted ${deletedDisabled.count} disabled aliases (30D expiry)`);
+        }
+
         // Clean old logs if configured
         const logRetentionDays = parseInt(process.env.LOG_RETENTION_DAYS || '30');
         if (logRetentionDays > 0) {

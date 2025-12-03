@@ -122,6 +122,9 @@ model Alias {
   lastForwardAt   DateTime?
   blockedCount    Int      @default(0)
 
+  // Tracking for auto-deletion
+  disabledAt      DateTime? // When alias was disabled (for 30-day deletion)
+
   // Reply support - allows replying through the alias
   replyEnabled    Boolean  @default(true)
   replyPrefix     String?  @unique // Unique prefix for reply routing
