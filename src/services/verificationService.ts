@@ -141,6 +141,7 @@ export async function sendAliasVerificationEmail(
   }
 
   const verificationUrl = createVerificationUrl(tokenResult.token);
+  const managementUrl = `${process.env.BASE_URL || 'https://makeanon.info'}/#manage?token=${managementToken}`;
 
   const subject = `Verify your email alias: ${aliasAddress}`;
   const text = `
@@ -157,10 +158,17 @@ ${verificationUrl}
 
 This link will expire in ${TOKEN_EXPIRY_HOURS} hours.
 
+IMPORTANT: Save your management token to manage this alias later:
+
+Management Token: ${managementToken}
+Management URL: ${managementUrl}
+
+With this token you can enable/disable the alias, block senders, or delete it.
+
 If you did not create this alias, you can safely ignore this email.
 
 --
-Emask - Email Masking Service
+MakeAnon - Email Masking Service
 `;
 
   const html = `
@@ -201,9 +209,15 @@ Emask - Email Masking Service
         This link will expire in ${TOKEN_EXPIRY_HOURS} hours.<br>
         If you did not create this alias, you can safely ignore this email.
       </p>
+
+      <div class="alias-box" style="margin-top: 20px; background: #fef3c7; border-color: #f59e0b;">
+        <p style="margin: 0 0 10px 0; font-weight: 600; color: #92400e;">Save Your Management Token</p>
+        <p style="margin: 0 0 5px 0;"><strong>Token:</strong> <code style="background: #fff; padding: 2px 6px; border-radius: 4px; font-size: 12px;">${managementToken}</code></p>
+        <p style="margin: 0;"><a href="${managementUrl}" style="color: #4F46E5;">Manage this alias</a></p>
+      </div>
     </div>
     <div class="footer">
-      <p>Emask - Email Masking Service</p>
+      <p>MakeAnon - Email Masking Service</p>
     </div>
   </div>
 </body>
@@ -242,7 +256,7 @@ With this link you can:
 Keep this link safe - anyone with this link can manage this alias.
 
 --
-Emask - Email Masking Service
+MakeAnon - Email Masking Service
 `;
 
   const html = `
@@ -291,7 +305,7 @@ Emask - Email Masking Service
       </div>
     </div>
     <div class="footer">
-      <p>Emask - Email Masking Service</p>
+      <p>MakeAnon - Email Masking Service</p>
     </div>
   </div>
 </body>

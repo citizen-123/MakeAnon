@@ -222,7 +222,7 @@ async function createAlias(e) {
         }
 
         // Use private endpoint if logged in, public otherwise
-        const endpoint = state.user ? '/aliases' : '/public/alias';
+        const endpoint = state.user ? '/aliases' : '/alias';
         const response = await api(endpoint, {
             method: 'POST',
             body: JSON.stringify(payload)
@@ -638,7 +638,7 @@ async function manageWithToken(e) {
     if (!token) return;
 
     try {
-        const response = await api(`/public/manage/${token}`);
+        const response = await api(`/manage/${token}`);
         const alias = response.data;
 
         elements.tokenAliasDetails.classList.remove('hidden');
@@ -692,7 +692,7 @@ async function manageWithToken(e) {
 // Toggle public alias
 async function togglePublicAlias(token, activate) {
     try {
-        await api(`/public/manage/${token}`, {
+        await api(`/manage/${token}`, {
             method: 'PUT',
             body: JSON.stringify({ isActive: activate })
         });
@@ -709,7 +709,7 @@ async function deletePublicAlias(token) {
     if (!confirm('Are you sure you want to delete this alias?')) return;
 
     try {
-        await api(`/public/manage/${token}`, { method: 'DELETE' });
+        await api(`/manage/${token}`, { method: 'DELETE' });
         showToast('Alias deleted');
         elements.tokenAliasDetails.classList.add('hidden');
         document.getElementById('managementToken').value = '';
@@ -724,7 +724,7 @@ async function blockPublicSender(e, token) {
     const email = document.getElementById('publicBlockEmail').value;
 
     try {
-        await api(`/public/manage/${token}/block`, {
+        await api(`/manage/${token}/block`, {
             method: 'POST',
             body: JSON.stringify({ email })
         });

@@ -16,7 +16,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 async function main() {
   try {
-    logger.info('Starting Emask Email Masking Service...');
+    logger.info('Starting MakeAnon Email Masking Service...');
 
     // Connect to Redis (optional but recommended)
     const redisConnected = await connectRedis();
@@ -39,7 +39,7 @@ async function main() {
 
     // Start HTTP API server
     const server = app.listen(PORT, HOST, () => {
-      logger.info(`Emask API server running on http://${HOST}:${PORT}`);
+      logger.info(`MakeAnon API server running on http://${HOST}:${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
       logger.info(`API Documentation: http://${HOST}:${PORT}/api/v1/health`);
     });
@@ -129,7 +129,7 @@ async function main() {
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
 
-    logger.info('Emask is ready to accept connections');
+    logger.info('MakeAnon is ready to accept connections');
 
   } catch (error) {
     logger.error('Failed to start server:', error);

@@ -51,7 +51,7 @@ export async function verifyConnection(): Promise<boolean> {
  */
 function getFromAddress(): string {
   const fromAddress = process.env.SMTP_FROM_ADDRESS || process.env.SMTP_OUTBOUND_USER;
-  const fromName = process.env.SMTP_FROM_NAME || 'Emask';
+  const fromName = process.env.SMTP_FROM_NAME || 'MakeAnon';
   return `"${fromName}" <${fromAddress}>`;
 }
 
@@ -83,7 +83,7 @@ export async function forwardEmail(
 
     // Create header showing original sender
     const headerText = `
----------- Forwarded via Emask ----------
+---------- Forwarded via MakeAnon ----------
 From: ${originalMessage.from}
 To: ${aliasAddress}
 Subject: ${originalMessage.subject || '(no subject)'}
@@ -93,7 +93,7 @@ Subject: ${originalMessage.subject || '(no subject)'}
 
     const headerHtml = `
 <div style="background: #f8f9fa; border-left: 4px solid #4F46E5; padding: 12px 16px; margin-bottom: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; color: #374151;">
-  <div style="font-weight: 600; color: #4F46E5; margin-bottom: 8px;">Forwarded via Emask</div>
+  <div style="font-weight: 600; color: #4F46E5; margin-bottom: 8px;">Forwarded via MakeAnon</div>
   <div><strong>From:</strong> ${escapeHtml(originalMessage.from)}</div>
   <div><strong>To:</strong> ${escapeHtml(aliasAddress)}</div>
   <div><strong>Subject:</strong> ${escapeHtml(originalMessage.subject || '(no subject)')}</div>
@@ -111,11 +111,11 @@ Subject: ${originalMessage.subject || '(no subject)'}
         : undefined,
       replyTo: replyToAddress,
       headers: {
-        'X-Emask-Forwarded': 'true',
-        'X-Emask-Original-From': originalMessage.from,
-        'X-Emask-Alias': aliasAddress,
-        ...(originalMessage.messageId && { 'X-Emask-Original-Message-Id': originalMessage.messageId }),
-        ...(replyPrefix && { 'X-Emask-Reply-Prefix': replyPrefix }),
+        'X-MakeAnon-Forwarded': 'true',
+        'X-MakeAnon-Original-From': originalMessage.from,
+        'X-MakeAnon-Alias': aliasAddress,
+        ...(originalMessage.messageId && { 'X-MakeAnon-Original-Message-Id': originalMessage.messageId }),
+        ...(replyPrefix && { 'X-MakeAnon-Reply-Prefix': replyPrefix }),
       },
     };
 
@@ -162,8 +162,8 @@ export async function sendReplyEmail(
       text,
       html,
       headers: {
-        'X-Emask-Reply': 'true',
-        'X-Emask-Alias': aliasAddress,
+        'X-MakeAnon-Reply': 'true',
+        'X-MakeAnon-Alias': aliasAddress,
       },
     };
 

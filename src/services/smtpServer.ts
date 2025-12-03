@@ -420,7 +420,7 @@ export function startSmtpServer(): SMTPServer {
     },
 
     // Banner
-    banner: 'Emask Email Masking Service',
+    banner: 'MakeAnon Email Masking Service',
   });
 
   smtpServer.listen(port, host, () => {

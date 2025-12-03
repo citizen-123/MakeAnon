@@ -67,8 +67,8 @@ async function deliverWebhook(
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'X-Emask-Signature': signature,
-              'X-Emask-Event': event,
+              'X-MakeAnon-Signature': signature,
+              'X-MakeAnon-Event': event,
             },
             body,
             signal: controller.signal,
