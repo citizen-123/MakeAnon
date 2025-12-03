@@ -1,0 +1,78 @@
+// Prisma schema for Emask - Email Masking Service
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  aliases   Alias[]
+  emailLogs EmailLog[]
+
+  @@map("users")
+}
+
+model Alias {
+  id          String   @id @default(uuid())
+  alias       String   @unique // The masked email prefix (e.g., "abc123")
+  fullAddress String   @unique // Full alias email (e.g., "abc123@mask.example.com")
+  label       String?  // User-friendly label (e.g., "Shopping Sites")
+  description String?  // Optional description
+  isActive    Boolean  @default(true)
+
+  // Statistics
+  forwardCount  Int    @default(0)
+  lastForwardAt DateTime?
+
+  // Ownership
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  emailLogs EmailLog[]
+
+  @@index([userId])
+  @@index([alias])
+  @@map("aliases")
+}
+
+model EmailLog {
+  id        String   @id @default(uuid())
+
+  // Email details
+  fromEmail String
+  toAlias   String
+  subject   String?
+
+  // Status
+  status    String   @default("received") // received, forwarded, failed, blocked
+  error     String?
+
+  // Relations
+  aliasId   String?
+  alias     Alias?   @relation(fields: [aliasId], references: [id], onDelete: SetNull)
+
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([aliasId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("email_logs")
+}
