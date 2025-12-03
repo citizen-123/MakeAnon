@@ -15,14 +15,8 @@ MakeAnon is an email masking service that allows you to create unlimited email a
 - Block unwanted senders
 - Multiple domain options
 
-## Authentication
-Some endpoints require authentication via JWT token. Include the token in the Authorization header:
-\`\`\`
-Authorization: Bearer <your-token>
-\`\`\`
-
-## Public Alias Management
-Public aliases can be managed using a management token (sent via email when the alias is created).
+## Alias Management
+Aliases are managed using a management token provided when the alias is created. Save this token - it cannot be recovered.
       `,
       contact: {
         name: 'MakeAnon Support',
@@ -36,13 +30,6 @@ Public aliases can be managed using a management token (sent via email when the 
       },
     ],
     components: {
-      securitySchemes: {
-        bearerAuth: {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-        },
-      },
       schemas: {
         Error: {
           type: 'object',
@@ -80,11 +67,9 @@ Public aliases can be managed using a management token (sent via email when the 
       },
     },
     tags: [
-      { name: 'Health', description: 'Health check endpoints' },
-      { name: 'Public', description: 'Public endpoints (no auth required)' },
-      { name: 'Aliases', description: 'Alias management (requires auth)' },
-      { name: 'Auth', description: 'Authentication endpoints' },
-      { name: 'Domains', description: 'Domain management' },
+      { name: 'Health', description: 'Health check and statistics' },
+      { name: 'Aliases', description: 'Create and manage email aliases' },
+      { name: 'Domains', description: 'Available email domains' },
     ],
   },
   apis: ['./src/routes/*.ts', './src/config/swagger-paths.ts'],
