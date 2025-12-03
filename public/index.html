@@ -19,6 +19,7 @@
                 <nav class="nav" id="mainNav">
                     <a href="#create" class="nav-link active" data-section="create">Create Alias</a>
                     <a href="#manage" class="nav-link" data-section="manage">Manage</a>
+                    <a href="#stats" class="nav-link" data-section="stats">Stats</a>
                 </nav>
                 <button class="mobile-menu-btn" id="mobileMenuBtn">
                     <span></span>
@@ -113,12 +114,45 @@
                 </div>
             </section>
 
+            <!-- Stats Section -->
+            <section class="section hidden" id="statsSection">
+                <div class="container">
+                    <div class="card card-lg">
+                        <h2 class="card-title">Service Statistics</h2>
+                        <p class="card-subtitle">Real-time statistics for the MakeAnon email masking service.</p>
+
+                        <div class="stats-grid" id="statsGrid">
+                            <div class="stat-card">
+                                <div class="stat-icon">📧</div>
+                                <div class="stat-value" id="statTotalAliases">-</div>
+                                <div class="stat-label">Total Aliases Created</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">📬</div>
+                                <div class="stat-value" id="statEmailsForwarded">-</div>
+                                <div class="stat-label">Emails Forwarded</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">✅</div>
+                                <div class="stat-value" id="statActiveAliases">-</div>
+                                <div class="stat-label">Active Aliases</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">🌐</div>
+                                <div class="stat-value" id="statDomains">-</div>
+                                <div class="stat-label">Available Domains</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
         </main>
 
         <!-- Footer -->
         <footer class="footer">
             <div class="container">
-                <p>&copy; 2024 MakeAnon. Protect your privacy.</p>
+                <p>&copy; 2025 MakeAnon. Protect your privacy.</p>
                 <div class="footer-links">
                     <a href="/api/v1/health" target="_blank">API Status</a>
                     <a href="https://github.com/citizen-123/emask" target="_blank">GitHub</a>

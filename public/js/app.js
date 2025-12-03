@@ -19,6 +19,7 @@ const elements = {
     heroSection: document.getElementById('heroSection'),
     createSection: document.getElementById('createSection'),
     manageSection: document.getElementById('manageSection'),
+    statsSection: document.getElementById('statsSection'),
 
     // Forms
     createAliasForm: document.getElementById('createAliasForm'),
@@ -110,6 +111,33 @@ function showSection(sectionName) {
     // Show/hide sections
     elements.createSection.classList.toggle('hidden', sectionName !== 'create');
     elements.manageSection.classList.toggle('hidden', sectionName !== 'manage');
+    elements.statsSection.classList.toggle('hidden', sectionName !== 'stats');
+
+    // Load stats when stats section is shown
+    if (sectionName === 'stats') {
+        loadStats();
+    }
+}
+
+// Load and display stats
+async function loadStats() {
+    try {
+        const response = await api('/stats');
+        const stats = response.data;
+
+        document.getElementById('statTotalAliases').textContent = formatNumber(stats.totalAliases);
+        document.getElementById('statEmailsForwarded').textContent = formatNumber(stats.totalEmailsForwarded || 0);
+        document.getElementById('statActiveAliases').textContent = formatNumber(stats.activeAliases);
+        document.getElementById('statDomains').textContent = formatNumber(stats.domainsCount);
+    } catch (error) {
+        console.error('Failed to load stats:', error);
+        showToast('Failed to load statistics', 'error');
+    }
+}
+
+// Format large numbers with commas
+function formatNumber(num) {
+    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 // Load domains
@@ -468,7 +496,7 @@ async function init() {
     const section = hashParts[0];
     const params = new URLSearchParams(hashParts[1] || '');
 
-    if (['create', 'manage'].includes(section)) {
+    if (['create', 'manage', 'stats'].includes(section)) {
         showSection(section);
 
         // If on manage section with a token, auto-load the alias

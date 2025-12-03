@@ -54,11 +54,12 @@ router.get('/stats', async (_req, res) => {
       return;
     }
 
-    const [totalAliases, activeAliases, totalUsers, domainsCount] = await Promise.all([
+    const [totalAliases, activeAliases, totalUsers, domainsCount, forwardedResult] = await Promise.all([
       prisma.alias.count(),
       prisma.alias.count({ where: { isActive: true } }),
       prisma.user.count(),
       prisma.domain.count({ where: { isActive: true } }),
+      prisma.alias.aggregate({ _sum: { forwardCount: true } }),
     ]);
 
     const stats = {
@@ -66,6 +67,7 @@ router.get('/stats', async (_req, res) => {
       activeAliases,
       totalUsers,
       domainsCount,
+      totalEmailsForwarded: forwardedResult._sum.forwardCount || 0,
     };
 
     await cacheStats(stats);
