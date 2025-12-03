@@ -337,18 +337,12 @@ router.post('/cleanup', async (req: AuthenticatedRequest, res: Response) => {
       oldLogs = result.count;
     }
 
-    // Clean old rate limits
-    const expiredRateLimits = await prisma.rateLimit.deleteMany({
-      where: { expiresAt: { lt: new Date() } },
-    });
-
     res.json({
       success: true,
       data: {
         expiredTokens: expiredTokens.count,
         expiredAliases,
         oldLogs,
-        expiredRateLimits: expiredRateLimits.count,
       },
       message: 'Cleanup completed successfully',
     });

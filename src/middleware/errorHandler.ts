@@ -2,19 +2,6 @@ import { Request, Response, NextFunction } from 'express';
 import { validationResult } from 'express-validator';
 import logger from '../utils/logger';
 
-export class AppError extends Error {
-  statusCode: number;
-  isOperational: boolean;
-
-  constructor(message: string, statusCode: number) {
-    super(message);
-    this.statusCode = statusCode;
-    this.isOperational = true;
-
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
-
 export function handleValidationErrors(
   req: Request,
   res: Response,
@@ -38,20 +25,12 @@ export function handleValidationErrors(
 }
 
 export function globalErrorHandler(
-  err: Error | AppError,
+  err: Error,
   req: Request,
   res: Response,
   _next: NextFunction
 ): void {
   logger.error('Unhandled error:', err);
-
-  if (err instanceof AppError) {
-    res.status(err.statusCode).json({
-      success: false,
-      error: err.message,
-    });
-    return;
-  }
 
   // Handle Prisma errors
   if (err.name === 'PrismaClientKnownRequestError') {

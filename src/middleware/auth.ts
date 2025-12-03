@@ -76,43 +76,6 @@ export async function authenticate(
 }
 
 /**
- * Optional authentication - doesn't fail if no token provided
- */
-export async function optionalAuthenticate(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    next();
-    return;
-  }
-
-  // If token is provided, validate it
-  await authenticate(req, res, next);
-}
-
-/**
- * Require admin privileges
- */
-export function requireAdmin(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): void {
-  if (!req.user?.isAdmin) {
-    res.status(403).json({
-      success: false,
-      error: 'Admin access required',
-    });
-    return;
-  }
-  next();
-}
-
-/**
  * Generate JWT token
  */
 export function generateToken(payload: { id: string; email: string; isAdmin: boolean }): string {

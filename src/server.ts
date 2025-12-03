@@ -66,11 +66,6 @@ async function main() {
           where: { expiresAt: { lt: new Date() } },
         });
 
-        // Clean expired rate limits
-        await prisma.rateLimit.deleteMany({
-          where: { expiresAt: { lt: new Date() } },
-        });
-
         // Clean expired aliases if configured
         if (process.env.DELETE_EXPIRED_ALIASES === 'true') {
           await prisma.alias.deleteMany({

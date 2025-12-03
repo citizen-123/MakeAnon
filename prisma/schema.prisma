@@ -1,4 +1,4 @@
-// Prisma schema for Emask - Email Masking Service (Multi-tenant Production)
+// Prisma schema for MakeAnon - Email Masking Service
 
 generator client {
   provider = "prisma-client-js"
@@ -49,34 +49,10 @@ model User {
 
   aliases       Alias[]
   emailLogs     EmailLog[]
-  webhooks      Webhook[]
-  apiKeys       ApiKey[]
 
   @@map("users")
 }
 
-// API Keys for programmatic access
-model ApiKey {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  name        String
-  keyHash     String   @unique // Hashed API key
-  keyPrefix   String   // First 8 chars for identification
-  lastUsedAt  DateTime?
-  expiresAt   DateTime?
-  isActive    Boolean  @default(true)
-
-  // Permissions
-  scopes      String[] // ["aliases:read", "aliases:write", "logs:read"]
-
-  createdAt   DateTime @default(now())
-
-  @@index([userId])
-  @@index([keyHash])
-  @@map("api_keys")
-}
 
 // Email verification tokens
 model VerificationToken {
@@ -139,7 +115,6 @@ model Alias {
 
   emailLogs     EmailLog[]
   blockedSenders BlockedSender[]
-  rules         AliasRule[]
 
   @@unique([alias, domainId])
   @@index([destinationEmail])
@@ -152,24 +127,6 @@ model Alias {
   @@map("aliases")
 }
 
-// Rules for alias behavior
-model AliasRule {
-  id        String   @id @default(uuid())
-  aliasId   String
-  alias     Alias    @relation(fields: [aliasId], references: [id], onDelete: Cascade)
-
-  // Rule type: block_sender, block_subject, forward_to, auto_reply
-  type      String
-  condition String   // Pattern or value to match
-  action    String   // Action to take
-  priority  Int      @default(0)
-  isActive  Boolean  @default(true)
-
-  createdAt DateTime @default(now())
-
-  @@index([aliasId])
-  @@map("alias_rules")
-}
 
 // Blocked senders per alias
 model BlockedSender {
@@ -225,60 +182,3 @@ model EmailLog {
   @@map("email_logs")
 }
 
-// Rate limiting tracking
-model RateLimit {
-  id          String   @id @default(uuid())
-  key         String   @unique // e.g., "create:user@example.com" or "forward:alias123"
-  count       Int      @default(1)
-  windowStart DateTime @default(now())
-  expiresAt   DateTime
-
-  @@index([key])
-  @@index([expiresAt])
-  @@map("rate_limits")
-}
-
-// Webhook configurations for users
-model Webhook {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  url         String
-  secret      String   // For HMAC signing
-  events      String[] // ["email.received", "email.forwarded", "alias.created"]
-  isActive    Boolean  @default(true)
-
-  // Stats
-  lastTriggered DateTime?
-  failureCount  Int      @default(0)
-
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@index([userId])
-  @@map("webhooks")
-}
-
-// Global statistics (cached/aggregated)
-model Stats {
-  id              String   @id @default("global")
-  totalAliases    BigInt   @default(0)
-  activeAliases   BigInt   @default(0)
-  totalForwarded  BigInt   @default(0)
-  totalBlocked    BigInt   @default(0)
-  totalUsers      BigInt   @default(0)
-
-  updatedAt       DateTime @updatedAt
-
-  @@map("stats")
-}
-
-// System configuration
-model SystemConfig {
-  key       String   @id
-  value     String
-  updatedAt DateTime @updatedAt
-
-  @@map("system_config")
-}

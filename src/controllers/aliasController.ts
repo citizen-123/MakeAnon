@@ -2,7 +2,6 @@ import { Request, Response } from 'express';
 import prisma from '../services/database';
 import { getDefaultDomain, getDomainById } from '../services/domainService';
 import { sendAliasVerificationEmail, sendManagementLinkEmail } from '../services/verificationService';
-import { triggerWebhooks } from '../services/webhookService';
 import { checkRateLimit, invalidateAliasCache } from '../services/redis';
 import { AuthenticatedRequest, CreatePublicAliasInput, UpdateAliasInput } from '../types';
 import {
@@ -639,12 +638,6 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
       data: { aliasCount: { increment: 1 } },
     });
 
-    // Trigger webhook
-    await triggerWebhooks(userId, 'alias.created', {
-      aliasId: newAlias.id,
-      alias: newAlias.fullAddress,
-    });
-
     logger.info(`Private alias created: ${fullAddress} for user ${req.user!.email}`);
 
     res.status(201).json({
@@ -797,11 +790,6 @@ export async function updateAlias(req: AuthenticatedRequest, res: Response): Pro
     });
 
     await invalidateAliasCache(existing.alias);
-    await triggerWebhooks(userId, 'alias.updated', {
-      aliasId: updated.id,
-      alias: updated.fullAddress,
-      changes: { label, description, isActive, replyEnabled },
-    });
 
     logger.info(`Alias updated: ${updated.fullAddress}`);
 
@@ -847,10 +835,6 @@ export async function deleteAlias(req: AuthenticatedRequest, res: Response): Pro
     });
 
     await invalidateAliasCache(existing.alias);
-    await triggerWebhooks(userId, 'alias.deleted', {
-      aliasId: existing.id,
-      alias: existing.fullAddress,
-    });
 
     logger.info(`Alias deleted: ${existing.fullAddress}`);
 

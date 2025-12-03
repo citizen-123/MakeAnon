@@ -2,7 +2,6 @@ import { SMTPServer, SMTPServerDataStream, SMTPServerSession, SMTPServerAddress 
 import { simpleParser, ParsedMail } from 'mailparser';
 import prisma from './database';
 import { forwardEmail, sendReplyEmail } from './emailService';
-import { triggerWebhooks } from './webhookService';
 import { checkRateLimit, getCachedAlias, cacheAlias } from './redis';
 import { parseAliasEmail, parseEmailAddress, isReplyAddress, getEmailDomains } from '../utils/helpers';
 import logger from '../utils/logger';
@@ -245,28 +244,9 @@ async function processEmail(
 
         await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'forwarded', alias.isPrivate, undefined, processingTime, result.messageId);
 
-        // Trigger webhook if user exists
-        if (alias.userId) {
-          await triggerWebhooks(alias.userId, 'email.forwarded', {
-            aliasId: alias.id,
-            alias: alias.fullAddress,
-            from: fromAddress,
-            subject: parsed.subject,
-          });
-        }
-
         logger.info(`Email forwarded: ${alias.fullAddress} -> ${alias.destinationEmail} (${processingTime}ms)`);
       } else {
         await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'failed', alias.isPrivate, result.error, processingTime);
-
-        if (alias.userId) {
-          await triggerWebhooks(alias.userId, 'email.failed', {
-            aliasId: alias.id,
-            alias: alias.fullAddress,
-            from: fromAddress,
-            error: result.error,
-          });
-        }
 
         logger.error(`Failed to forward email: ${result.error}`);
       }

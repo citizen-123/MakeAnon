@@ -43,25 +43,6 @@ export function hashString(str: string): string {
 }
 
 /**
- * Create HMAC signature for webhooks
- */
-export function createHmacSignature(payload: string, secret: string): string {
-  return crypto.createHmac('sha256', secret).update(payload).digest('hex');
-}
-
-/**
- * Verify HMAC signature
- */
-export function verifyHmacSignature(
-  payload: string,
-  signature: string,
-  secret: string
-): boolean {
-  const expected = createHmacSignature(payload, secret);
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-}
-
-/**
  * Get configured email domains
  */
 export function getEmailDomains(): string[] {
@@ -146,21 +127,6 @@ export function isValidCustomAlias(alias: string): boolean {
  */
 export function sanitizeForLog(str: string, maxLength = 100): string {
   return str.substring(0, maxLength).replace(/[\n\r]/g, ' ');
-}
-
-/**
- * Mask email address for display
- */
-export function maskEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  if (!domain) return email;
-
-  const maskedLocal =
-    local.length <= 2
-      ? local[0] + '*'.repeat(local.length - 1)
-      : local[0] + '*'.repeat(local.length - 2) + local[local.length - 1];
-
-  return `${maskedLocal}@${domain}`;
 }
 
 /**
