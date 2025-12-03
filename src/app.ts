@@ -2,11 +2,15 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
 import routes from './routes';
 import { globalErrorHandler, notFoundHandler } from './middleware/errorHandler';
 import logger from './utils/logger';
 
 const app = express();
+
+// Trust proxy - required for correct client IP detection behind reverse proxy (Caddy/nginx)
+app.set('trust proxy', 1);
 
 // Security middleware
 app.use(helmet());
@@ -47,14 +51,16 @@ app.use((req, res, next) => {
 // API routes
 app.use('/api/v1', routes);
 
-// Root endpoint
-app.get('/', (_req, res) => {
-  res.json({
-    success: true,
-    message: 'Welcome to Emask - Email Masking Service',
-    version: '1.0.0',
-    documentation: '/api/v1/health',
-  });
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, '../public')));
+
+// Serve index.html for all non-API routes (SPA support)
+app.get('*', (req, res, next) => {
+  // Skip API routes
+  if (req.path.startsWith('/api/')) {
+    return next();
+  }
+  res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
 // Error handling

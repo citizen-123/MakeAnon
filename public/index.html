@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MakeAnon - Email Masking Service</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎭</text></svg>">
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="container header-content">
+                <a href="/" class="logo">
+                    <span class="logo-icon">🎭</span>
+                    <span class="logo-text">MakeAnon</span>
+                </a>
+                <nav class="nav" id="mainNav">
+                    <a href="#create" class="nav-link active" data-section="create">Create Alias</a>
+                    <a href="#manage" class="nav-link" data-section="manage">Manage</a>
+                    <a href="#account" class="nav-link" data-section="account">Account</a>
+                </nav>
+                <div class="header-actions">
+                    <button class="btn btn-outline" id="loginBtn">Login</button>
+                    <button class="btn btn-primary" id="signupBtn">Sign Up</button>
+                    <div class="user-menu" id="userMenu" style="display: none;">
+                        <span class="user-email" id="userEmail"></span>
+                        <button class="btn btn-outline btn-sm" id="logoutBtn">Logout</button>
+                    </div>
+                </div>
+                <button class="mobile-menu-btn" id="mobileMenuBtn">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Hero Section (shown when not logged in) -->
+            <section class="hero" id="heroSection">
+                <div class="container">
+                    <h1>Protect Your Email Privacy</h1>
+                    <p class="hero-subtitle">Create unlimited email aliases to shield your real address from spam, data breaches, and unwanted tracking.</p>
+                    <div class="hero-domains">
+                        <span class="domain-tag">@makeanon.info</span>
+                        <span class="domain-tag">@makeanon.xyz</span>
+                        <span class="domain-tag">@iamanon.lol</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Create Alias Section -->
+            <section class="section" id="createSection">
+                <div class="container">
+                    <div class="card card-lg">
+                        <h2 class="card-title">Create New Alias</h2>
+                        <p class="card-subtitle">Emails sent to your alias will be forwarded to your real email address.</p>
+
+                        <form id="createAliasForm" class="form">
+                            <div class="form-group">
+                                <label for="destinationEmail">Your Real Email</label>
+                                <input type="email" id="destinationEmail" class="input" placeholder="your@email.com" required>
+                                <span class="form-hint">We'll forward emails here. You'll need to verify this address.</span>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group flex-1">
+                                    <label for="customAlias">Custom Alias (optional)</label>
+                                    <input type="text" id="customAlias" class="input" placeholder="myalias">
+                                    <span class="form-hint">Leave blank for random alias</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="domainSelect">Domain</label>
+                                    <select id="domainSelect" class="input select">
+                                        <!-- Populated by JS -->
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="aliasLabel">Label (optional)</label>
+                                <input type="text" id="aliasLabel" class="input" placeholder="Shopping, Newsletters, etc.">
+                                <span class="form-hint">Help you remember what this alias is for</span>
+                            </div>
+
+                            <div class="alias-preview" id="aliasPreview">
+                                <span class="preview-label">Your alias will be:</span>
+                                <span class="preview-address" id="previewAddress">********@makeanon.info</span>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary btn-lg btn-block">
+                                <span class="btn-text">Create Alias</span>
+                                <span class="btn-loading" style="display: none;">Creating...</span>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Manage Section -->
+            <section class="section hidden" id="manageSection">
+                <div class="container">
+                    <div class="card">
+                        <h2 class="card-title">Manage Your Aliases</h2>
+
+                        <!-- Public Alias Management -->
+                        <div class="manage-tabs">
+                            <button class="tab-btn active" data-tab="token">With Management Token</button>
+                            <button class="tab-btn" data-tab="account">My Aliases</button>
+                        </div>
+
+                        <!-- Token-based management -->
+                        <div class="tab-content active" id="tokenTab">
+                            <p class="text-muted">Enter the management token sent to your email when you created the alias.</p>
+                            <form id="tokenManageForm" class="form">
+                                <div class="form-group">
+                                    <label for="managementToken">Management Token</label>
+                                    <input type="text" id="managementToken" class="input" placeholder="Enter your management token">
+                                </div>
+                                <button type="submit" class="btn btn-primary">Load Alias</button>
+                            </form>
+
+                            <div id="tokenAliasDetails" class="alias-details hidden">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+
+                        <!-- Account-based management -->
+                        <div class="tab-content" id="accountTab">
+                            <div id="loginPrompt" class="text-center">
+                                <p class="text-muted">Login to view and manage all your aliases.</p>
+                                <button class="btn btn-primary" id="loginPromptBtn">Login</button>
+                            </div>
+
+                            <div id="aliasesList" class="aliases-list hidden">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Account Section -->
+            <section class="section hidden" id="accountSection">
+                <div class="container">
+                    <div class="grid-2">
+                        <!-- Profile Card -->
+                        <div class="card">
+                            <h2 class="card-title">Profile</h2>
+                            <div id="profileContent">
+                                <p class="text-muted text-center">Login to view your profile.</p>
+                            </div>
+                        </div>
+
+                        <!-- Stats Card -->
+                        <div class="card">
+                            <h2 class="card-title">Statistics</h2>
+                            <div id="statsContent">
+                                <p class="text-muted text-center">Login to view your statistics.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Email Logs -->
+                    <div class="card mt-4">
+                        <h2 class="card-title">Recent Email Activity</h2>
+                        <div id="logsContent">
+                            <p class="text-muted text-center">Login to view email logs.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="container">
+                <p>&copy; 2024 MakeAnon. Protect your privacy.</p>
+                <div class="footer-links">
+                    <a href="/api/v1/health" target="_blank">API Status</a>
+                    <a href="https://github.com/citizen-123/emask" target="_blank">GitHub</a>
+                </div>
+            </div>
+        </footer>
+
+        <!-- Modals -->
+        <!-- Login Modal -->
+        <div class="modal" id="loginModal">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content">
+                <button class="modal-close" data-close>&times;</button>
+                <h2>Login</h2>
+                <form id="loginForm" class="form">
+                    <div class="form-group">
+                        <label for="loginEmail">Email</label>
+                        <input type="email" id="loginEmail" class="input" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="loginPassword">Password</label>
+                        <input type="password" id="loginPassword" class="input" required>
+                    </div>
+                    <div class="form-error" id="loginError"></div>
+                    <button type="submit" class="btn btn-primary btn-block">Login</button>
+                </form>
+                <p class="text-center mt-3">
+                    Don't have an account? <a href="#" id="switchToSignup">Sign up</a>
+                </p>
+            </div>
+        </div>
+
+        <!-- Signup Modal -->
+        <div class="modal" id="signupModal">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content">
+                <button class="modal-close" data-close>&times;</button>
+                <h2>Create Account</h2>
+                <form id="signupForm" class="form">
+                    <div class="form-group">
+                        <label for="signupName">Name (optional)</label>
+                        <input type="text" id="signupName" class="input">
+                    </div>
+                    <div class="form-group">
+                        <label for="signupEmail">Email</label>
+                        <input type="email" id="signupEmail" class="input" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="signupPassword">Password</label>
+                        <input type="password" id="signupPassword" class="input" minlength="6" required>
+                    </div>
+                    <div class="form-error" id="signupError"></div>
+                    <button type="submit" class="btn btn-primary btn-block">Create Account</button>
+                </form>
+                <p class="text-center mt-3">
+                    Already have an account? <a href="#" id="switchToLogin">Login</a>
+                </p>
+            </div>
+        </div>
+
+        <!-- Alias Details Modal -->
+        <div class="modal" id="aliasModal">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content modal-lg">
+                <button class="modal-close" data-close>&times;</button>
+                <h2>Alias Details</h2>
+                <div id="aliasModalContent">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Success Modal -->
+        <div class="modal" id="successModal">
+            <div class="modal-backdrop"></div>
+            <div class="modal-content">
+                <button class="modal-close" data-close>&times;</button>
+                <div class="success-content">
+                    <div class="success-icon">✓</div>
+                    <h2>Alias Created!</h2>
+                    <div id="successDetails">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Container -->
+        <div class="toast-container" id="toastContainer"></div>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>
