@@ -75,8 +75,8 @@ Create aliases using any of these domains:
 
 ```bash
 # Clone the repository
-git clone https://github.com/citizen-123/emask.git
-cd emask
+git clone https://github.com/citizen-123/MakeAnon.git
+cd MakeAnon
 
 # Install dependencies
 npm install
@@ -111,7 +111,7 @@ HOST=0.0.0.0
 NODE_ENV=production
 
 # Database (PostgreSQL)
-DATABASE_URL="postgresql://user:password@localhost:5432/emask"
+DATABASE_URL="postgresql://user:password@localhost:5432/makeanon"
 
 # Redis (optional but recommended)
 REDIS_URL="redis://localhost:6379"
@@ -132,8 +132,8 @@ SMTP_OUTBOUND_HOST=smtp.gmail.com
 SMTP_OUTBOUND_PORT=587
 SMTP_OUTBOUND_USER=your-email@gmail.com
 SMTP_OUTBOUND_PASS=your-app-password
-SMTP_FROM_ADDRESS=noreply@example.com
-SMTP_FROM_NAME=Emask
+SMTP_FROM_ADDRESS=noreply@makeanon.info
+SMTP_FROM_NAME=MakeAnon
 
 # Rate Limiting
 RATE_LIMIT_PER_MINUTE=60
@@ -414,13 +414,13 @@ Set up webhooks to receive real-time notifications about email events.
 version: '3.8'
 
 services:
-  emask:
+  makeanon:
     build: .
     ports:
       - "3000:3000"
       - "25:25"
     environment:
-      - DATABASE_URL=postgresql://emask:password@postgres:5432/emask
+      - DATABASE_URL=postgresql://makeanon:password@postgres:5432/makeanon
       - REDIS_URL=redis://redis:6379
     depends_on:
       - postgres
@@ -429,9 +429,9 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      - POSTGRES_USER=emask
+      - POSTGRES_USER=makeanon
       - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=emask
+      - POSTGRES_DB=makeanon
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -489,7 +489,7 @@ Configure your domain's DNS records:
 ## Project Structure
 
 ```
-emask/
+makeanon/
 ├── prisma/
 │   └── schema.prisma          # Database schema
 ├── src/
