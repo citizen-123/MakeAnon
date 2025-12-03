@@ -209,11 +209,9 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
         replyEnabled: newAlias.replyEnabled,
         createdAt: newAlias.createdAt,
         expiresAt: newAlias.expiresAt,
-        managementUrl: createManagementUrl(managementToken),
+        managementToken: managementToken,
       },
-      message: REQUIRE_VERIFICATION
-        ? 'Alias created! Please check your email to verify and activate it.'
-        : 'Alias created successfully! Check your email for the management link.',
+      message: 'Alias created! Please verify your email within 72 hours to keep it active.',
     });
   } catch (error) {
     logger.error('Create public alias error:', error);

@@ -193,17 +193,52 @@ async function createAlias(e) {
                     </span>
                 </span>
             </div>
-            <p class="text-muted mt-3" style="font-size: 0.875rem;">
-                ${alias.isActive
-                    ? 'Your alias is active! Check your email for the management token to manage this alias later.'
-                    : 'Please check your email to verify your address and get your management token.'}
+
+            <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 16px; margin: 16px 0;">
+                <p style="margin: 0 0 8px 0; font-weight: 600; color: #92400e;">Save Your Management Token</p>
+                <p style="margin: 0 0 12px 0; font-size: 0.75rem; color: #a16207;">You'll need this token to manage, disable, or delete your alias.</p>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" readonly value="${alias.managementToken}" id="successTokenInput"
+                        style="flex: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-family: monospace; font-size: 0.875rem; background: white;">
+                    <button type="button" class="btn btn-outline" id="copyTokenBtn" style="white-space: nowrap;">
+                        Copy
+                    </button>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 8px; margin-top: 16px;">
+                <button type="button" class="btn btn-primary" id="manageNowBtn" style="flex: 1;">
+                    Manage Alias
+                </button>
+                <button type="button" class="btn btn-outline" onclick="closeAllModals()" style="flex: 1;">
+                    Done
+                </button>
+            </div>
+
+            <p class="text-muted mt-3" style="font-size: 0.75rem; color: #f59e0b; text-align: center;">
+                Verify your email within 72 hours or your alias will be deleted.
             </p>
-            ${!alias.emailVerified ? `
-            <p class="text-muted" style="font-size: 0.75rem; color: #f59e0b;">
-                Note: Unverified aliases will be automatically deleted after 72 hours.
-            </p>
-            ` : ''}
         `;
+
+        // Add event listeners for the new buttons
+        document.getElementById('copyTokenBtn').addEventListener('click', () => {
+            const input = document.getElementById('successTokenInput');
+            input.select();
+            navigator.clipboard.writeText(input.value).then(() => {
+                document.getElementById('copyTokenBtn').textContent = 'Copied!';
+                setTimeout(() => {
+                    document.getElementById('copyTokenBtn').textContent = 'Copy';
+                }, 2000);
+            });
+        });
+
+        document.getElementById('manageNowBtn').addEventListener('click', () => {
+            closeAllModals();
+            showSection('manage');
+            document.getElementById('managementToken').value = alias.managementToken;
+            document.getElementById('tokenManageForm').dispatchEvent(new Event('submit'));
+        });
+
         openModal(elements.successModal);
 
         // Reset form

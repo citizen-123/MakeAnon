@@ -141,7 +141,6 @@ export async function sendAliasVerificationEmail(
   }
 
   const verificationUrl = createVerificationUrl(tokenResult.token);
-  const managementUrl = `${process.env.BASE_URL || 'https://makeanon.info'}/#manage?token=${managementToken}`;
 
   const subject = `Action Required: Verify your email alias within 72 hours - ${aliasAddress}`;
   const text = `
@@ -157,13 +156,6 @@ Your alias is ACTIVE and ready to forward emails!
 IMPORTANT: Verify your email within 72 hours or your alias will be automatically deleted.
 
 Click here to verify: ${verificationUrl}
-
-SAVE YOUR MANAGEMENT TOKEN:
-
-Management Token: ${managementToken}
-Management URL: ${managementUrl}
-
-With this token you can enable/disable the alias, block senders, or delete it.
 
 If you did not create this alias, you can safely ignore this email and the alias will be deleted after 72 hours.
 
@@ -213,12 +205,6 @@ MakeAnon - Email Masking Service
       <p style="text-align: center;">
         <a href="${verificationUrl}" class="button">Verify Email & Keep Alias</a>
       </p>
-
-      <div class="alias-box" style="margin-top: 20px; background: #fef3c7; border-color: #f59e0b;">
-        <p style="margin: 0 0 10px 0; font-weight: 600; color: #92400e;">Save Your Management Token</p>
-        <p style="margin: 0 0 5px 0;"><strong>Token:</strong> <code style="background: #fff; padding: 2px 6px; border-radius: 4px; font-size: 12px;">${managementToken}</code></p>
-        <p style="margin: 0;"><a href="${managementUrl}" style="color: #4F46E5;">Manage this alias</a></p>
-      </div>
 
       <p style="font-size: 13px; color: #6b7280; margin-top: 20px;">
         If you did not create this alias, you can safely ignore this email and it will be automatically deleted after 72 hours.
