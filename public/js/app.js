@@ -3,11 +3,9 @@ const API_BASE = '/api/v1';
 
 // State
 let state = {
-    user: null,
-    token: localStorage.getItem('token'),
     domains: [],
-    aliases: [],
-    currentSection: 'create'
+    currentSection: 'create',
+    currentManagementToken: null
 };
 
 // DOM Elements
@@ -21,25 +19,12 @@ const elements = {
     heroSection: document.getElementById('heroSection'),
     createSection: document.getElementById('createSection'),
     manageSection: document.getElementById('manageSection'),
-    accountSection: document.getElementById('accountSection'),
-
-    // Auth
-    loginBtn: document.getElementById('loginBtn'),
-    signupBtn: document.getElementById('signupBtn'),
-    logoutBtn: document.getElementById('logoutBtn'),
-    userMenu: document.getElementById('userMenu'),
-    userEmail: document.getElementById('userEmail'),
 
     // Forms
     createAliasForm: document.getElementById('createAliasForm'),
-    loginForm: document.getElementById('loginForm'),
-    signupForm: document.getElementById('signupForm'),
     tokenManageForm: document.getElementById('tokenManageForm'),
 
     // Modals
-    loginModal: document.getElementById('loginModal'),
-    signupModal: document.getElementById('signupModal'),
-    aliasModal: document.getElementById('aliasModal'),
     successModal: document.getElementById('successModal'),
 
     // Create alias
@@ -51,11 +36,6 @@ const elements = {
 
     // Content areas
     tokenAliasDetails: document.getElementById('tokenAliasDetails'),
-    aliasesList: document.getElementById('aliasesList'),
-    loginPrompt: document.getElementById('loginPrompt'),
-    profileContent: document.getElementById('profileContent'),
-    statsContent: document.getElementById('statsContent'),
-    logsContent: document.getElementById('logsContent'),
 
     // Toast
     toastContainer: document.getElementById('toastContainer')
@@ -67,10 +47,6 @@ async function api(endpoint, options = {}) {
         'Content-Type': 'application/json',
         ...options.headers
     };
-
-    if (state.token) {
-        headers['Authorization'] = `Bearer ${state.token}`;
-    }
 
     try {
         const response = await fetch(`${API_BASE}${endpoint}`, {
@@ -134,34 +110,6 @@ function showSection(sectionName) {
     // Show/hide sections
     elements.createSection.classList.toggle('hidden', sectionName !== 'create');
     elements.manageSection.classList.toggle('hidden', sectionName !== 'manage');
-    elements.accountSection.classList.toggle('hidden', sectionName !== 'account');
-
-    // Load section data
-    if (sectionName === 'manage' && state.user) {
-        loadUserAliases();
-    } else if (sectionName === 'account' && state.user) {
-        loadProfile();
-        loadStats();
-        loadLogs();
-    }
-}
-
-// Update UI based on auth state
-function updateAuthUI() {
-    const isLoggedIn = !!state.user;
-
-    elements.loginBtn.style.display = isLoggedIn ? 'none' : '';
-    elements.signupBtn.style.display = isLoggedIn ? 'none' : '';
-    elements.userMenu.style.display = isLoggedIn ? 'flex' : 'none';
-
-    if (isLoggedIn) {
-        elements.userEmail.textContent = state.user.email;
-        elements.loginPrompt.classList.add('hidden');
-        elements.aliasesList.classList.remove('hidden');
-    } else {
-        elements.loginPrompt.classList.remove('hidden');
-        elements.aliasesList.classList.add('hidden');
-    }
 }
 
 // Load domains
@@ -221,9 +169,7 @@ async function createAlias(e) {
             payload.label = label;
         }
 
-        // Use private endpoint if logged in, public otherwise
-        const endpoint = state.user ? '/aliases' : '/alias';
-        const response = await api(endpoint, {
+        const response = await api('/alias', {
             method: 'POST',
             body: JSON.stringify(payload)
         });
@@ -233,7 +179,7 @@ async function createAlias(e) {
         document.getElementById('successDetails').innerHTML = `
             <div class="detail-row">
                 <span class="detail-label">Alias Address</span>
-                <span class="detail-value">${alias.fullAddress || `${alias.alias}@${getDomainName(alias.domainId)}`}</span>
+                <span class="detail-value">${alias.fullAddress || alias.alias}</span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Forwards To</span>
@@ -243,16 +189,9 @@ async function createAlias(e) {
                 <span class="detail-label">Status</span>
                 <span class="detail-value">${alias.emailVerified ? 'Active' : 'Pending Verification'}</span>
             </div>
-            ${!alias.emailVerified ? `
             <p class="text-muted mt-3" style="font-size: 0.875rem;">
-                Please check your email to verify your address. The alias won't forward emails until verified.
+                Please check your email to verify your address and get your management token.
             </p>
-            ` : ''}
-            ${alias.managementToken ? `
-            <p class="text-muted mt-3" style="font-size: 0.875rem;">
-                A management link has been sent to your email for future management of this alias.
-            </p>
-            ` : ''}
         `;
         openModal(elements.successModal);
 
@@ -269,373 +208,15 @@ async function createAlias(e) {
     }
 }
 
-// Get domain name by ID
-function getDomainName(domainId) {
-    const domain = state.domains.find(d => d.id === domainId);
-    return domain ? domain.domain : 'makeanon.info';
-}
-
-// Login
-async function login(e) {
-    e.preventDefault();
-
-    const email = document.getElementById('loginEmail').value;
-    const password = document.getElementById('loginPassword').value;
-    const errorEl = document.getElementById('loginError');
-
-    try {
-        errorEl.textContent = '';
-        const response = await api('/auth/login', {
-            method: 'POST',
-            body: JSON.stringify({ email, password })
-        });
-
-        state.token = response.data.token;
-        state.user = response.data.user;
-        localStorage.setItem('token', state.token);
-
-        closeModal(elements.loginModal);
-        updateAuthUI();
-        showToast('Logged in successfully');
-
-        // Reload current section
-        showSection(state.currentSection);
-
-    } catch (error) {
-        errorEl.textContent = error.message;
-    }
-}
-
-// Signup
-async function signup(e) {
-    e.preventDefault();
-
-    const name = document.getElementById('signupName').value;
-    const email = document.getElementById('signupEmail').value;
-    const password = document.getElementById('signupPassword').value;
-    const errorEl = document.getElementById('signupError');
-
-    try {
-        errorEl.textContent = '';
-        const response = await api('/auth/signup', {
-            method: 'POST',
-            body: JSON.stringify({ name, email, password })
-        });
-
-        state.token = response.data.token;
-        state.user = response.data.user;
-        localStorage.setItem('token', state.token);
-
-        closeModal(elements.signupModal);
-        updateAuthUI();
-        showToast('Account created successfully');
-
-    } catch (error) {
-        errorEl.textContent = error.message;
-    }
-}
-
-// Logout
-function logout() {
-    state.token = null;
-    state.user = null;
-    state.aliases = [];
-    localStorage.removeItem('token');
-    updateAuthUI();
-    showSection('create');
-    showToast('Logged out');
-}
-
-// Load user profile
-async function loadProfile() {
-    if (!state.user) return;
-
-    try {
-        const response = await api('/auth/profile');
-        state.user = response.data;
-
-        elements.profileContent.innerHTML = `
-            <div class="detail-row">
-                <span class="detail-label">Email</span>
-                <span class="detail-value">${state.user.email}</span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Name</span>
-                <span class="detail-value">${state.user.name || '-'}</span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Role</span>
-                <span class="detail-value">${state.user.role}</span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Member Since</span>
-                <span class="detail-value">${new Date(state.user.createdAt).toLocaleDateString()}</span>
-            </div>
-        `;
-    } catch (error) {
-        elements.profileContent.innerHTML = `<p class="text-muted text-center">Failed to load profile</p>`;
-    }
-}
-
-// Load stats
-async function loadStats() {
-    if (!state.user) return;
-
-    try {
-        const response = await api('/aliases/stats');
-        const stats = response.data;
-
-        elements.statsContent.innerHTML = `
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="stat-value">${stats.totalAliases || 0}</div>
-                    <div class="stat-label">Total Aliases</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${stats.activeAliases || 0}</div>
-                    <div class="stat-label">Active</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${stats.emailsForwarded || 0}</div>
-                    <div class="stat-label">Emails Forwarded</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${stats.emailsBlocked || 0}</div>
-                    <div class="stat-label">Blocked</div>
-                </div>
-            </div>
-        `;
-    } catch (error) {
-        elements.statsContent.innerHTML = `<p class="text-muted text-center">Failed to load statistics</p>`;
-    }
-}
-
-// Load email logs
-async function loadLogs() {
-    if (!state.user) return;
-
-    try {
-        const response = await api('/aliases/logs?limit=20');
-        const logs = response.data || [];
-
-        if (logs.length === 0) {
-            elements.logsContent.innerHTML = `<p class="text-muted text-center">No email activity yet</p>`;
-            return;
-        }
-
-        elements.logsContent.innerHTML = `
-            <table class="logs-table">
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Alias</th>
-                        <th>From</th>
-                        <th>Subject</th>
-                        <th>Status</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${logs.map(log => `
-                        <tr>
-                            <td>${new Date(log.createdAt).toLocaleString()}</td>
-                            <td>${log.alias?.alias || '-'}</td>
-                            <td>${log.fromAddress || '-'}</td>
-                            <td>${log.subject || '-'}</td>
-                            <td><span class="alias-status status-${log.status === 'forwarded' ? 'active' : 'inactive'}">${log.status}</span></td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `;
-    } catch (error) {
-        elements.logsContent.innerHTML = `<p class="text-muted text-center">Failed to load logs</p>`;
-    }
-}
-
-// Load user aliases
-async function loadUserAliases() {
-    if (!state.user) return;
-
-    try {
-        const response = await api('/aliases');
-        state.aliases = response.data || [];
-        renderAliasesList();
-    } catch (error) {
-        elements.aliasesList.innerHTML = `<p class="text-muted text-center">Failed to load aliases</p>`;
-    }
-}
-
-// Render aliases list
-function renderAliasesList() {
-    if (state.aliases.length === 0) {
-        elements.aliasesList.innerHTML = `
-            <p class="text-muted text-center">No aliases yet. Create your first alias!</p>
-        `;
-        return;
-    }
-
-    elements.aliasesList.innerHTML = state.aliases.map(alias => `
-        <div class="alias-item" data-id="${alias.id}">
-            <div class="alias-info">
-                <div class="alias-address">${alias.alias}@${getDomainName(alias.domainId)}</div>
-                ${alias.label ? `<div class="alias-label">${alias.label}</div>` : ''}
-                <div class="alias-meta">
-                    <span class="alias-status ${alias.isActive ? 'status-active' : 'status-inactive'}">
-                        ${alias.isActive ? 'Active' : 'Inactive'}
-                    </span>
-                    ${!alias.emailVerified ? '<span class="alias-status status-pending">Unverified</span>' : ''}
-                    <span>Forwarded: ${alias._count?.emailLogs || 0}</span>
-                </div>
-            </div>
-            <div class="alias-actions">
-                <button class="btn btn-outline btn-sm" onclick="toggleAlias('${alias.id}', ${!alias.isActive})">
-                    ${alias.isActive ? 'Disable' : 'Enable'}
-                </button>
-                <button class="btn btn-outline btn-sm" onclick="showAliasDetails('${alias.id}')">Details</button>
-                <button class="btn btn-danger btn-sm" onclick="deleteAlias('${alias.id}')">Delete</button>
-            </div>
-        </div>
-    `).join('');
-}
-
-// Toggle alias active state
-async function toggleAlias(id, activate) {
-    try {
-        await api(`/aliases/${id}/toggle`, { method: 'POST' });
-        showToast(`Alias ${activate ? 'enabled' : 'disabled'}`);
-        loadUserAliases();
-    } catch (error) {
-        showToast(error.message, 'error');
-    }
-}
-
-// Delete alias
-async function deleteAlias(id) {
-    if (!confirm('Are you sure you want to delete this alias? This cannot be undone.')) {
-        return;
-    }
-
-    try {
-        await api(`/aliases/${id}`, { method: 'DELETE' });
-        showToast('Alias deleted');
-        loadUserAliases();
-    } catch (error) {
-        showToast(error.message, 'error');
-    }
-}
-
-// Show alias details modal
-async function showAliasDetails(id) {
-    try {
-        const response = await api(`/aliases/${id}`);
-        const alias = response.data;
-
-        document.getElementById('aliasModalContent').innerHTML = `
-            <div class="detail-row">
-                <span class="detail-label">Alias Address</span>
-                <span class="detail-value">${alias.alias}@${getDomainName(alias.domainId)}</span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Forwards To</span>
-                <span class="detail-value">${alias.destinationEmail}</span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Label</span>
-                <span class="detail-value">${alias.label || '-'}</span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Status</span>
-                <span class="detail-value">
-                    <span class="alias-status ${alias.isActive ? 'status-active' : 'status-inactive'}">
-                        ${alias.isActive ? 'Active' : 'Inactive'}
-                    </span>
-                </span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Email Verified</span>
-                <span class="detail-value">${alias.emailVerified ? 'Yes' : 'No'}</span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Created</span>
-                <span class="detail-value">${new Date(alias.createdAt).toLocaleString()}</span>
-            </div>
-            <div class="detail-row">
-                <span class="detail-label">Emails Forwarded</span>
-                <span class="detail-value">${alias._count?.emailLogs || 0}</span>
-            </div>
-
-            <h3 class="mt-4">Blocked Senders</h3>
-            <div class="blocked-list" id="blockedList">
-                ${(alias.blockedSenders || []).length === 0
-                    ? '<p class="text-muted">No blocked senders</p>'
-                    : alias.blockedSenders.map(b => `
-                        <div class="blocked-item">
-                            <span class="blocked-email">${b.email}</span>
-                            <button class="btn btn-danger btn-sm" onclick="unblockSender('${alias.id}', '${b.id}')">Remove</button>
-                        </div>
-                    `).join('')
-                }
-            </div>
-
-            <form class="form mt-3" onsubmit="blockSender(event, '${alias.id}')">
-                <div class="form-row">
-                    <div class="form-group flex-1">
-                        <input type="email" class="input" placeholder="email@example.com" id="blockEmail" required>
-                    </div>
-                    <button type="submit" class="btn btn-outline">Block Sender</button>
-                </div>
-            </form>
-
-            <div class="mt-4" style="display: flex; gap: 0.5rem;">
-                <button class="btn btn-outline flex-1" onclick="toggleAlias('${alias.id}', ${!alias.isActive}); closeAllModals();">
-                    ${alias.isActive ? 'Disable Alias' : 'Enable Alias'}
-                </button>
-                <button class="btn btn-danger flex-1" onclick="deleteAlias('${alias.id}'); closeAllModals();">
-                    Delete Alias
-                </button>
-            </div>
-        `;
-
-        openModal(elements.aliasModal);
-    } catch (error) {
-        showToast(error.message, 'error');
-    }
-}
-
-// Block sender
-async function blockSender(e, aliasId) {
-    e.preventDefault();
-    const email = document.getElementById('blockEmail').value;
-
-    try {
-        await api(`/aliases/${aliasId}/block`, {
-            method: 'POST',
-            body: JSON.stringify({ email })
-        });
-        showToast('Sender blocked');
-        showAliasDetails(aliasId);
-    } catch (error) {
-        showToast(error.message, 'error');
-    }
-}
-
-// Unblock sender
-async function unblockSender(aliasId, blockId) {
-    try {
-        await api(`/aliases/${aliasId}/block/${blockId}`, { method: 'DELETE' });
-        showToast('Sender unblocked');
-        showAliasDetails(aliasId);
-    } catch (error) {
-        showToast(error.message, 'error');
-    }
-}
-
 // Manage alias with token
 async function manageWithToken(e) {
     e.preventDefault();
 
     const token = document.getElementById('managementToken').value.trim();
     if (!token) return;
+
+    // Store the token for later use
+    state.currentManagementToken = token;
 
     try {
         const response = await api(`/manage/${token}`);
@@ -665,16 +246,16 @@ async function manageWithToken(e) {
             </div>
 
             <div class="mt-4" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                <button class="btn btn-outline" onclick="togglePublicAlias('${token}', ${!alias.isActive})">
-                    ${alias.isActive ? 'Disable' : 'Enable'}
+                <button class="btn ${alias.isActive ? 'btn-outline' : 'btn-success'}" id="toggleAliasBtn">
+                    ${alias.isActive ? 'Disable Alias' : 'Enable Alias'}
                 </button>
-                <button class="btn btn-danger" onclick="deletePublicAlias('${token}')">
+                <button class="btn btn-danger" id="deleteAliasBtn">
                     Delete Alias
                 </button>
             </div>
 
             <h3 class="mt-4">Block a Sender</h3>
-            <form class="form" onsubmit="blockPublicSender(event, '${token}')">
+            <form class="form" id="blockSenderForm">
                 <div class="form-row">
                     <div class="form-group flex-1">
                         <input type="email" class="input" placeholder="spammer@example.com" id="publicBlockEmail" required>
@@ -683,6 +264,16 @@ async function manageWithToken(e) {
                 </div>
             </form>
         `;
+
+        // Attach event listeners to the buttons
+        document.getElementById('toggleAliasBtn').addEventListener('click', () => {
+            togglePublicAlias(!alias.isActive);
+        });
+
+        document.getElementById('deleteAliasBtn').addEventListener('click', deletePublicAlias);
+
+        document.getElementById('blockSenderForm').addEventListener('submit', blockPublicSender);
+
     } catch (error) {
         showToast(error.message, 'error');
         elements.tokenAliasDetails.classList.add('hidden');
@@ -690,9 +281,11 @@ async function manageWithToken(e) {
 }
 
 // Toggle public alias
-async function togglePublicAlias(token, activate) {
+async function togglePublicAlias(activate) {
+    if (!state.currentManagementToken) return;
+
     try {
-        await api(`/manage/${token}`, {
+        await api(`/manage/${state.currentManagementToken}`, {
             method: 'PUT',
             body: JSON.stringify({ isActive: activate })
         });
@@ -705,26 +298,30 @@ async function togglePublicAlias(token, activate) {
 }
 
 // Delete public alias
-async function deletePublicAlias(token) {
-    if (!confirm('Are you sure you want to delete this alias?')) return;
+async function deletePublicAlias() {
+    if (!state.currentManagementToken) return;
+    if (!confirm('Are you sure you want to delete this alias? This cannot be undone.')) return;
 
     try {
-        await api(`/manage/${token}`, { method: 'DELETE' });
+        await api(`/manage/${state.currentManagementToken}`, { method: 'DELETE' });
         showToast('Alias deleted');
         elements.tokenAliasDetails.classList.add('hidden');
         document.getElementById('managementToken').value = '';
+        state.currentManagementToken = null;
     } catch (error) {
         showToast(error.message, 'error');
     }
 }
 
 // Block sender for public alias
-async function blockPublicSender(e, token) {
+async function blockPublicSender(e) {
     e.preventDefault();
+    if (!state.currentManagementToken) return;
+
     const email = document.getElementById('publicBlockEmail').value;
 
     try {
-        await api(`/manage/${token}/block`, {
+        await api(`/manage/${state.currentManagementToken}/block`, {
             method: 'POST',
             body: JSON.stringify({ email })
         });
@@ -733,39 +330,6 @@ async function blockPublicSender(e, token) {
     } catch (error) {
         showToast(error.message, 'error');
     }
-}
-
-// Check auth on load
-async function checkAuth() {
-    if (!state.token) return;
-
-    try {
-        const response = await api('/auth/profile');
-        state.user = response.data;
-        updateAuthUI();
-    } catch (error) {
-        // Token invalid
-        state.token = null;
-        state.user = null;
-        localStorage.removeItem('token');
-    }
-}
-
-// Tab switching
-function initTabs() {
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const tabId = btn.dataset.tab;
-
-            // Update buttons
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-
-            // Update content
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            document.getElementById(`${tabId}Tab`).classList.add('active');
-        });
-    });
 }
 
 // Event Listeners
@@ -784,26 +348,8 @@ function initEventListeners() {
         });
     });
 
-    // Auth buttons
-    elements.loginBtn.addEventListener('click', () => openModal(elements.loginModal));
-    elements.signupBtn.addEventListener('click', () => openModal(elements.signupModal));
-    elements.logoutBtn.addEventListener('click', logout);
-    document.getElementById('loginPromptBtn').addEventListener('click', () => openModal(elements.loginModal));
-    document.getElementById('switchToSignup').addEventListener('click', (e) => {
-        e.preventDefault();
-        closeModal(elements.loginModal);
-        openModal(elements.signupModal);
-    });
-    document.getElementById('switchToLogin').addEventListener('click', (e) => {
-        e.preventDefault();
-        closeModal(elements.signupModal);
-        openModal(elements.loginModal);
-    });
-
     // Forms
     elements.createAliasForm.addEventListener('submit', createAlias);
-    elements.loginForm.addEventListener('submit', login);
-    elements.signupForm.addEventListener('submit', signup);
     elements.tokenManageForm.addEventListener('submit', manageWithToken);
 
     // Alias preview
@@ -829,25 +375,20 @@ function initEventListeners() {
 // Initialize
 async function init() {
     initEventListeners();
-    initTabs();
     await loadDomains();
-    await checkAuth();
 
     // Handle hash navigation with query params (e.g., #manage?token=xxx&verified=true)
     const hashParts = window.location.hash.slice(1).split('?');
     const section = hashParts[0];
     const params = new URLSearchParams(hashParts[1] || '');
 
-    if (['create', 'manage', 'account'].includes(section)) {
+    if (['create', 'manage'].includes(section)) {
         showSection(section);
 
         // If on manage section with a token, auto-load the alias
         if (section === 'manage' && params.get('token')) {
             const token = params.get('token');
             const verified = params.get('verified') === 'true';
-
-            // Switch to token tab
-            document.querySelector('[data-tab="token"]').click();
 
             // Fill in the token
             document.getElementById('managementToken').value = token;
@@ -868,13 +409,5 @@ async function init() {
 // Start app
 document.addEventListener('DOMContentLoaded', init);
 
-// Make functions available globally for onclick handlers
-window.toggleAlias = toggleAlias;
-window.deleteAlias = deleteAlias;
-window.showAliasDetails = showAliasDetails;
-window.blockSender = blockSender;
-window.unblockSender = unblockSender;
-window.togglePublicAlias = togglePublicAlias;
-window.deletePublicAlias = deletePublicAlias;
-window.blockPublicSender = blockPublicSender;
+// Make functions available globally
 window.closeAllModals = closeAllModals;
