@@ -833,10 +833,35 @@ async function init() {
     await loadDomains();
     await checkAuth();
 
-    // Handle hash navigation
-    const hash = window.location.hash.slice(1);
-    if (['create', 'manage', 'account'].includes(hash)) {
-        showSection(hash);
+    // Handle hash navigation with query params (e.g., #manage?token=xxx&verified=true)
+    const hashParts = window.location.hash.slice(1).split('?');
+    const section = hashParts[0];
+    const params = new URLSearchParams(hashParts[1] || '');
+
+    if (['create', 'manage', 'account'].includes(section)) {
+        showSection(section);
+
+        // If on manage section with a token, auto-load the alias
+        if (section === 'manage' && params.get('token')) {
+            const token = params.get('token');
+            const verified = params.get('verified') === 'true';
+
+            // Switch to token tab
+            document.querySelector('[data-tab="token"]').click();
+
+            // Fill in the token
+            document.getElementById('managementToken').value = token;
+
+            // Show success message if just verified
+            if (verified) {
+                showToast('Email verified successfully! Your alias is now active.', 'success');
+            }
+
+            // Auto-load the alias
+            setTimeout(() => {
+                document.getElementById('tokenManageForm').dispatchEvent(new Event('submit'));
+            }, 100);
+        }
     }
 }
 

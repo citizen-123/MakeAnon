@@ -55,10 +55,10 @@ export async function verifyAliasEmail(req: Request, res: Response): Promise<voi
 
     logger.info(`Alias verified: ${alias.fullAddress}`);
 
-    // Redirect to management page or return success
+    // Redirect to management page with token pre-filled
     const baseUrl = process.env.BASE_URL || '';
     if (baseUrl) {
-      res.redirect(`${baseUrl}/verified?alias=${encodeURIComponent(alias.fullAddress)}`);
+      res.redirect(`${baseUrl}/#manage?token=${encodeURIComponent(alias.managementToken!)}&verified=true`);
     } else {
       res.json({
         success: true,
