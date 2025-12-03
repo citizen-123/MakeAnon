@@ -1,32 +1,118 @@
 import { customAlphabet } from 'nanoid';
+import crypto from 'crypto';
 
 // Create a nanoid generator with lowercase letters and numbers (no confusing chars)
 const alphabet = 'abcdefghijkmnopqrstuvwxyz23456789';
-const generateId = customAlphabet(alphabet, parseInt(process.env.ALIAS_LENGTH || '8'));
 
 /**
  * Generate a unique alias string
  */
-export function generateAlias(): string {
+export function generateAlias(length?: number): string {
+  const aliasLength = length || parseInt(process.env.ALIAS_LENGTH || '8');
+  const generateId = customAlphabet(alphabet, aliasLength);
   return generateId();
 }
 
 /**
- * Create full email address from alias
+ * Generate a secure random token
  */
-export function createFullAliasEmail(alias: string): string {
-  const domain = process.env.EMAIL_DOMAIN || 'mask.example.com';
-  return `${alias}@${domain}`;
+export function generateSecureToken(length = 32): string {
+  return crypto.randomBytes(length).toString('hex');
 }
 
 /**
- * Extract alias from full email address
+ * Generate a management token for public aliases
  */
-export function extractAliasFromEmail(email: string): string | null {
-  const domain = process.env.EMAIL_DOMAIN || 'mask.example.com';
-  const regex = new RegExp(`^([^@]+)@${domain.replace('.', '\\.')}$`, 'i');
-  const match = email.match(regex);
-  return match ? match[1].toLowerCase() : null;
+export function generateManagementToken(): string {
+  return generateSecureToken(24);
+}
+
+/**
+ * Generate a reply prefix for alias replies
+ */
+export function generateReplyPrefix(): string {
+  const prefix = customAlphabet(alphabet, 12);
+  return `r${prefix()}`;
+}
+
+/**
+ * Hash a string using SHA256
+ */
+export function hashString(str: string): string {
+  return crypto.createHash('sha256').update(str).digest('hex');
+}
+
+/**
+ * Create HMAC signature for webhooks
+ */
+export function createHmacSignature(payload: string, secret: string): string {
+  return crypto.createHmac('sha256', secret).update(payload).digest('hex');
+}
+
+/**
+ * Verify HMAC signature
+ */
+export function verifyHmacSignature(
+  payload: string,
+  signature: string,
+  secret: string
+): boolean {
+  const expected = createHmacSignature(payload, secret);
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
+
+/**
+ * Get configured email domains
+ */
+export function getEmailDomains(): string[] {
+  const domains = process.env.EMAIL_DOMAINS || 'mask.example.com';
+  return domains.split(',').map((d) => d.trim().toLowerCase());
+}
+
+/**
+ * Get default email domain
+ */
+export function getDefaultDomain(): string {
+  const domains = getEmailDomains();
+  return domains[0];
+}
+
+/**
+ * Check if a domain is valid for aliases
+ */
+export function isValidAliasDomain(domain: string): boolean {
+  const domains = getEmailDomains();
+  return domains.includes(domain.toLowerCase());
+}
+
+/**
+ * Create full email address from alias and domain
+ */
+export function createFullAliasEmail(alias: string, domain?: string): string {
+  const emailDomain = domain || getDefaultDomain();
+  return `${alias.toLowerCase()}@${emailDomain}`;
+}
+
+/**
+ * Extract alias and domain from full email address
+ */
+export function parseAliasEmail(email: string): { alias: string; domain: string } | null {
+  const parts = email.toLowerCase().split('@');
+  if (parts.length !== 2) return null;
+
+  const [alias, domain] = parts;
+  if (!isValidAliasDomain(domain)) return null;
+
+  return { alias, domain };
+}
+
+/**
+ * Check if email matches a reply address pattern
+ */
+export function isReplyAddress(email: string): boolean {
+  const parsed = parseAliasEmail(email);
+  if (!parsed) return false;
+  return parsed.alias.startsWith('r') && parsed.alias.length === 13;
 }
 
 /**
@@ -38,10 +124,43 @@ export function isValidEmail(email: string): boolean {
 }
 
 /**
+ * Validate custom alias format
+ */
+export function isValidCustomAlias(alias: string): boolean {
+  const minLength = parseInt(process.env.MIN_CUSTOM_ALIAS_LENGTH || '4');
+  const maxLength = 32;
+
+  // Must be alphanumeric with optional hyphens/underscores, no consecutive special chars
+  const aliasRegex = /^[a-z0-9]+([._-][a-z0-9]+)*$/i;
+
+  return (
+    alias.length >= minLength &&
+    alias.length <= maxLength &&
+    aliasRegex.test(alias) &&
+    !alias.startsWith('r') // Reserved for reply addresses
+  );
+}
+
+/**
  * Sanitize string for safe logging
  */
 export function sanitizeForLog(str: string, maxLength = 100): string {
   return str.substring(0, maxLength).replace(/[\n\r]/g, ' ');
+}
+
+/**
+ * Mask email address for display
+ */
+export function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!domain) return email;
+
+  const maskedLocal =
+    local.length <= 2
+      ? local[0] + '*'.repeat(local.length - 1)
+      : local[0] + '*'.repeat(local.length - 2) + local[local.length - 1];
+
+  return `${maskedLocal}@${domain}`;
 }
 
 /**
@@ -57,4 +176,101 @@ export function parseEmailAddress(address: string): { name: string | null; email
     };
   }
   return { name: null, email: address.trim().toLowerCase() };
+}
+
+/**
+ * Get base URL for links
+ */
+export function getBaseUrl(): string {
+  return process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+}
+
+/**
+ * Create management URL for an alias
+ */
+export function createManagementUrl(managementToken: string): string {
+  return `${getBaseUrl()}/manage/${managementToken}`;
+}
+
+/**
+ * Create verification URL
+ */
+export function createVerificationUrl(token: string): string {
+  return `${getBaseUrl()}/api/v1/verify/${token}`;
+}
+
+/**
+ * Calculate expiration date
+ */
+export function calculateExpiresAt(days: number): Date {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+/**
+ * Check if a date is expired
+ */
+export function isExpired(date: Date | null): boolean {
+  if (!date) return false;
+  return new Date() > new Date(date);
+}
+
+/**
+ * Format date for display
+ */
+export function formatDate(date: Date): string {
+  return new Date(date).toISOString();
+}
+
+/**
+ * Sleep for a specified number of milliseconds
+ */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry a function with exponential backoff
+ */
+export async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  baseDelayMs = 1000
+): Promise<T> {
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+      if (attempt < maxRetries - 1) {
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        await sleep(delay);
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+// List of known disposable email domains
+const DISPOSABLE_DOMAINS = new Set([
+  'tempmail.com',
+  'throwaway.email',
+  'guerrillamail.com',
+  'mailinator.com',
+  '10minutemail.com',
+  'temp-mail.org',
+  'fakeinbox.com',
+  // Add more as needed
+]);
+
+/**
+ * Check if email is from a disposable domain
+ */
+export function isDisposableEmail(email: string): boolean {
+  const domain = email.split('@')[1]?.toLowerCase();
+  return domain ? DISPOSABLE_DOMAINS.has(domain) : false;
 }
