@@ -1,73 +1,222 @@
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import prisma from '../services/database';
-import { AuthenticatedRequest, CreateAliasInput, UpdateAliasInput } from '../types';
-import { generateAlias, createFullAliasEmail } from '../utils/helpers';
+import { getDefaultDomain, getDomainById } from '../services/domainService';
+import { sendAliasVerificationEmail, sendManagementLinkEmail } from '../services/verificationService';
+import { triggerWebhooks } from '../services/webhookService';
+import { checkRateLimit, invalidateAliasCache } from '../services/redis';
+import { AuthenticatedRequest, CreatePublicAliasInput, UpdateAliasInput } from '../types';
+import {
+  generateAlias,
+  generateManagementToken,
+  generateReplyPrefix,
+  createFullAliasEmail,
+  createManagementUrl,
+  isValidEmail,
+  isValidCustomAlias,
+  isDisposableEmail,
+  calculateExpiresAt,
+} from '../utils/helpers';
 import logger from '../utils/logger';
 
-const MAX_ALIASES = parseInt(process.env.MAX_ALIASES_PER_USER || '50');
+const MAX_ALIASES_PER_EMAIL = parseInt(process.env.MAX_ALIASES_PER_EMAIL || '10');
+const MAX_ALIASES_PER_USER = parseInt(process.env.MAX_ALIASES_PER_USER || '100');
+const ALIAS_CREATION_LIMIT = parseInt(process.env.ALIAS_CREATION_LIMIT_PER_HOUR || '10');
+const ALLOW_CUSTOM_ALIASES = process.env.ALLOW_CUSTOM_ALIASES !== 'false';
+const REQUIRE_VERIFICATION = process.env.REQUIRE_EMAIL_VERIFICATION !== 'false';
+const BLOCK_DISPOSABLE = process.env.BLOCK_DISPOSABLE_EMAILS === 'true';
 
-export async function createAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
+// ============================================================================
+// Public Alias Creation (No Auth Required)
+// ============================================================================
+
+/**
+ * Create a public alias - no authentication required
+ * Only requires destination email and optionally a custom alias
+ */
+export async function createPublicAlias(req: Request, res: Response): Promise<void> {
   try {
-    const userId = req.user!.id;
-    const { label, description }: CreateAliasInput = req.body;
+    const { destinationEmail, domainId, customAlias, label, description, expiresIn }: CreatePublicAliasInput = req.body;
 
-    // Check alias limit
-    const aliasCount = await prisma.alias.count({
-      where: { userId },
-    });
-
-    if (aliasCount >= MAX_ALIASES) {
+    // Validate destination email
+    if (!destinationEmail || !isValidEmail(destinationEmail)) {
       res.status(400).json({
         success: false,
-        error: `Maximum number of aliases (${MAX_ALIASES}) reached`,
+        error: 'Please provide a valid destination email address',
       });
       return;
     }
 
-    // Generate unique alias
-    let alias: string;
-    let fullAddress: string;
-    let attempts = 0;
-    const maxAttempts = 10;
+    const email = destinationEmail.toLowerCase();
 
-    do {
-      alias = generateAlias();
-      fullAddress = createFullAliasEmail(alias);
-      const existing = await prisma.alias.findUnique({
-        where: { alias },
-      });
-      if (!existing) break;
-      attempts++;
-    } while (attempts < maxAttempts);
-
-    if (attempts >= maxAttempts) {
-      res.status(500).json({
+    // Block disposable emails if configured
+    if (BLOCK_DISPOSABLE && isDisposableEmail(email)) {
+      res.status(400).json({
         success: false,
-        error: 'Failed to generate unique alias. Please try again.',
+        error: 'Disposable email addresses are not allowed',
       });
       return;
     }
+
+    // Rate limiting per destination email
+    const rateLimit = await checkRateLimit(`alias:create:${email}`, ALIAS_CREATION_LIMIT, 3600);
+    if (!rateLimit.allowed) {
+      res.status(429).json({
+        success: false,
+        error: `Too many aliases created. Please try again later.`,
+        retryAfter: Math.ceil((rateLimit.resetAt.getTime() - Date.now()) / 1000),
+      });
+      return;
+    }
+
+    // Check alias limit per email
+    const existingCount = await prisma.alias.count({
+      where: { destinationEmail: email, isPrivate: false },
+    });
+
+    if (existingCount >= MAX_ALIASES_PER_EMAIL) {
+      res.status(400).json({
+        success: false,
+        error: `Maximum number of aliases (${MAX_ALIASES_PER_EMAIL}) for this email reached. Create an account for more aliases.`,
+      });
+      return;
+    }
+
+    // Get domain
+    let domain = domainId ? await getDomainById(domainId) : await getDefaultDomain();
+    if (!domain) {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid domain selected',
+      });
+      return;
+    }
+
+    // Handle custom or generated alias
+    let aliasName: string;
+
+    if (customAlias) {
+      if (!ALLOW_CUSTOM_ALIASES) {
+        res.status(400).json({
+          success: false,
+          error: 'Custom aliases are not allowed',
+        });
+        return;
+      }
+
+      if (!isValidCustomAlias(customAlias)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid alias format. Use 4-32 alphanumeric characters, dots, hyphens, or underscores.',
+        });
+        return;
+      }
+
+      // Check if custom alias is available
+      const existing = await prisma.alias.findFirst({
+        where: {
+          alias: customAlias.toLowerCase(),
+          domainId: domain.id,
+        },
+      });
+
+      if (existing) {
+        res.status(409).json({
+          success: false,
+          error: 'This alias is already taken. Please choose a different one.',
+        });
+        return;
+      }
+
+      aliasName = customAlias.toLowerCase();
+    } else {
+      // Generate unique alias
+      let attempts = 0;
+      const maxAttempts = 10;
+
+      do {
+        aliasName = generateAlias();
+        const existing = await prisma.alias.findFirst({
+          where: { alias: aliasName, domainId: domain.id },
+        });
+        if (!existing) break;
+        attempts++;
+      } while (attempts < maxAttempts);
+
+      if (attempts >= maxAttempts) {
+        res.status(500).json({
+          success: false,
+          error: 'Failed to generate unique alias. Please try again.',
+        });
+        return;
+      }
+    }
+
+    const fullAddress = createFullAliasEmail(aliasName, domain.domain);
+    const managementToken = generateManagementToken();
+    const replyPrefix = generateReplyPrefix();
 
     // Create alias
     const newAlias = await prisma.alias.create({
       data: {
-        alias,
+        alias: aliasName,
+        domainId: domain.id,
         fullAddress,
+        destinationEmail: email,
+        emailVerified: !REQUIRE_VERIFICATION,
         label: label || null,
         description: description || null,
-        userId,
+        isActive: !REQUIRE_VERIFICATION, // Inactive until verified
+        isPrivate: false,
+        managementToken,
+        replyPrefix,
+        replyEnabled: true,
+        expiresAt: expiresIn ? calculateExpiresAt(expiresIn) : null,
+      },
+      include: {
+        domain: {
+          select: { id: true, domain: true },
+        },
       },
     });
 
-    logger.info(`Alias created: ${fullAddress} for user ${req.user!.email}`);
+    // Update domain alias count
+    await prisma.domain.update({
+      where: { id: domain.id },
+      data: { aliasCount: { increment: 1 } },
+    });
+
+    // Send verification email
+    if (REQUIRE_VERIFICATION) {
+      await sendAliasVerificationEmail(email, fullAddress, managementToken);
+    } else {
+      // Send management link directly
+      await sendManagementLinkEmail(email, fullAddress, createManagementUrl(managementToken));
+    }
+
+    logger.info(`Public alias created: ${fullAddress} -> ${email}`);
 
     res.status(201).json({
       success: true,
-      data: newAlias,
-      message: 'Alias created successfully',
+      data: {
+        id: newAlias.id,
+        alias: newAlias.alias,
+        fullAddress: newAlias.fullAddress,
+        domain: newAlias.domain,
+        destinationEmail: newAlias.destinationEmail,
+        emailVerified: newAlias.emailVerified,
+        isActive: newAlias.isActive,
+        label: newAlias.label,
+        replyEnabled: newAlias.replyEnabled,
+        createdAt: newAlias.createdAt,
+        expiresAt: newAlias.expiresAt,
+        managementUrl: createManagementUrl(managementToken),
+      },
+      message: REQUIRE_VERIFICATION
+        ? 'Alias created! Please check your email to verify and activate it.'
+        : 'Alias created successfully! Check your email for the management link.',
     });
   } catch (error) {
-    logger.error('Create alias error:', error);
+    logger.error('Create public alias error:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to create alias',
@@ -75,6 +224,411 @@ export async function createAlias(req: AuthenticatedRequest, res: Response): Pro
   }
 }
 
+// ============================================================================
+// Alias Management via Token (No Auth Required)
+// ============================================================================
+
+/**
+ * Get alias by management token
+ */
+export async function getAliasByToken(req: Request, res: Response): Promise<void> {
+  try {
+    const { token } = req.params;
+
+    const alias = await prisma.alias.findUnique({
+      where: { managementToken: token },
+      include: {
+        domain: { select: { id: true, domain: true } },
+        emailLogs: {
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          select: {
+            id: true,
+            fromEmail: true,
+            subject: true,
+            status: true,
+            createdAt: true,
+          },
+        },
+        blockedSenders: {
+          select: { id: true, email: true, reason: true },
+        },
+      },
+    });
+
+    if (!alias) {
+      res.status(404).json({
+        success: false,
+        error: 'Alias not found or invalid management token',
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: alias,
+    });
+  } catch (error) {
+    logger.error('Get alias by token error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get alias',
+    });
+  }
+}
+
+/**
+ * Update alias via management token
+ */
+export async function updateAliasByToken(req: Request, res: Response): Promise<void> {
+  try {
+    const { token } = req.params;
+    const { label, description, isActive, replyEnabled }: UpdateAliasInput = req.body;
+
+    const alias = await prisma.alias.findUnique({
+      where: { managementToken: token },
+    });
+
+    if (!alias) {
+      res.status(404).json({
+        success: false,
+        error: 'Alias not found or invalid management token',
+      });
+      return;
+    }
+
+    const updated = await prisma.alias.update({
+      where: { id: alias.id },
+      data: {
+        ...(label !== undefined && { label }),
+        ...(description !== undefined && { description }),
+        ...(isActive !== undefined && { isActive }),
+        ...(replyEnabled !== undefined && { replyEnabled }),
+      },
+      include: {
+        domain: { select: { id: true, domain: true } },
+      },
+    });
+
+    await invalidateAliasCache(alias.alias);
+
+    logger.info(`Alias updated via token: ${updated.fullAddress}`);
+
+    res.json({
+      success: true,
+      data: updated,
+      message: 'Alias updated successfully',
+    });
+  } catch (error) {
+    logger.error('Update alias by token error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update alias',
+    });
+  }
+}
+
+/**
+ * Delete alias via management token
+ */
+export async function deleteAliasByToken(req: Request, res: Response): Promise<void> {
+  try {
+    const { token } = req.params;
+
+    const alias = await prisma.alias.findUnique({
+      where: { managementToken: token },
+    });
+
+    if (!alias) {
+      res.status(404).json({
+        success: false,
+        error: 'Alias not found or invalid management token',
+      });
+      return;
+    }
+
+    await prisma.alias.delete({ where: { id: alias.id } });
+
+    // Update domain count
+    await prisma.domain.update({
+      where: { id: alias.domainId },
+      data: { aliasCount: { decrement: 1 } },
+    });
+
+    await invalidateAliasCache(alias.alias);
+
+    logger.info(`Alias deleted via token: ${alias.fullAddress}`);
+
+    res.json({
+      success: true,
+      message: 'Alias deleted successfully',
+    });
+  } catch (error) {
+    logger.error('Delete alias by token error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete alias',
+    });
+  }
+}
+
+/**
+ * Block a sender for an alias
+ */
+export async function blockSender(req: Request, res: Response): Promise<void> {
+  try {
+    const { token } = req.params;
+    const { email, reason } = req.body;
+
+    if (!email || !isValidEmail(email)) {
+      res.status(400).json({
+        success: false,
+        error: 'Please provide a valid email address to block',
+      });
+      return;
+    }
+
+    const alias = await prisma.alias.findUnique({
+      where: { managementToken: token },
+    });
+
+    if (!alias) {
+      res.status(404).json({
+        success: false,
+        error: 'Alias not found or invalid management token',
+      });
+      return;
+    }
+
+    const blocked = await prisma.blockedSender.upsert({
+      where: {
+        aliasId_email: {
+          aliasId: alias.id,
+          email: email.toLowerCase(),
+        },
+      },
+      create: {
+        aliasId: alias.id,
+        email: email.toLowerCase(),
+        reason: reason || null,
+      },
+      update: {
+        reason: reason || null,
+      },
+    });
+
+    logger.info(`Sender blocked for ${alias.fullAddress}: ${email}`);
+
+    res.json({
+      success: true,
+      data: blocked,
+      message: 'Sender blocked successfully',
+    });
+  } catch (error) {
+    logger.error('Block sender error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to block sender',
+    });
+  }
+}
+
+/**
+ * Unblock a sender
+ */
+export async function unblockSender(req: Request, res: Response): Promise<void> {
+  try {
+    const { token, senderId } = req.params;
+
+    const alias = await prisma.alias.findUnique({
+      where: { managementToken: token },
+    });
+
+    if (!alias) {
+      res.status(404).json({
+        success: false,
+        error: 'Alias not found or invalid management token',
+      });
+      return;
+    }
+
+    await prisma.blockedSender.deleteMany({
+      where: { id: senderId, aliasId: alias.id },
+    });
+
+    res.json({
+      success: true,
+      message: 'Sender unblocked successfully',
+    });
+  } catch (error) {
+    logger.error('Unblock sender error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to unblock sender',
+    });
+  }
+}
+
+// ============================================================================
+// Authenticated Alias Management (For Private Aliases)
+// ============================================================================
+
+/**
+ * Create a private alias (requires authentication)
+ */
+export async function createPrivateAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const userId = req.user!.id;
+    const { destinationEmail, domainId, customAlias, label, description, expiresIn }: CreatePublicAliasInput = req.body;
+
+    // Get user with their limits
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, maxAliases: true },
+    });
+
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        error: 'User not found',
+      });
+      return;
+    }
+
+    // Use user's email if no destination provided
+    const email = (destinationEmail || user.email).toLowerCase();
+
+    // Check alias limit
+    const aliasCount = await prisma.alias.count({
+      where: { userId },
+    });
+
+    if (aliasCount >= (user.maxAliases || MAX_ALIASES_PER_USER)) {
+      res.status(400).json({
+        success: false,
+        error: `Maximum number of aliases (${user.maxAliases || MAX_ALIASES_PER_USER}) reached`,
+      });
+      return;
+    }
+
+    // Get domain
+    let domain = domainId ? await getDomainById(domainId) : await getDefaultDomain();
+    if (!domain) {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid domain selected',
+      });
+      return;
+    }
+
+    // Handle custom or generated alias
+    let aliasName: string;
+
+    if (customAlias) {
+      if (!ALLOW_CUSTOM_ALIASES) {
+        res.status(400).json({
+          success: false,
+          error: 'Custom aliases are not allowed',
+        });
+        return;
+      }
+
+      if (!isValidCustomAlias(customAlias)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid alias format',
+        });
+        return;
+      }
+
+      const existing = await prisma.alias.findFirst({
+        where: { alias: customAlias.toLowerCase(), domainId: domain.id },
+      });
+
+      if (existing) {
+        res.status(409).json({
+          success: false,
+          error: 'This alias is already taken',
+        });
+        return;
+      }
+
+      aliasName = customAlias.toLowerCase();
+    } else {
+      let attempts = 0;
+      do {
+        aliasName = generateAlias();
+        const existing = await prisma.alias.findFirst({
+          where: { alias: aliasName, domainId: domain.id },
+        });
+        if (!existing) break;
+        attempts++;
+      } while (attempts < 10);
+
+      if (attempts >= 10) {
+        res.status(500).json({
+          success: false,
+          error: 'Failed to generate unique alias',
+        });
+        return;
+      }
+    }
+
+    const fullAddress = createFullAliasEmail(aliasName, domain.domain);
+    const replyPrefix = generateReplyPrefix();
+
+    const newAlias = await prisma.alias.create({
+      data: {
+        alias: aliasName,
+        domainId: domain.id,
+        fullAddress,
+        destinationEmail: email,
+        emailVerified: true, // Authenticated users are verified
+        label: label || null,
+        description: description || null,
+        isActive: true,
+        isPrivate: true,
+        userId,
+        replyPrefix,
+        replyEnabled: true,
+        expiresAt: expiresIn ? calculateExpiresAt(expiresIn) : null,
+      },
+      include: {
+        domain: { select: { id: true, domain: true } },
+      },
+    });
+
+    // Update domain count
+    await prisma.domain.update({
+      where: { id: domain.id },
+      data: { aliasCount: { increment: 1 } },
+    });
+
+    // Trigger webhook
+    await triggerWebhooks(userId, 'alias.created', {
+      aliasId: newAlias.id,
+      alias: newAlias.fullAddress,
+    });
+
+    logger.info(`Private alias created: ${fullAddress} for user ${req.user!.email}`);
+
+    res.status(201).json({
+      success: true,
+      data: newAlias,
+      message: 'Alias created successfully',
+    });
+  } catch (error) {
+    logger.error('Create private alias error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create alias',
+    });
+  }
+}
+
+/**
+ * Get user's aliases
+ */
 export async function getAliases(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
@@ -83,29 +637,42 @@ export async function getAliases(req: AuthenticatedRequest, res: Response): Prom
       limit = 20,
       sortBy = 'createdAt',
       sortOrder = 'desc',
+      active,
     } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
+    const where: any = { userId };
+
+    if (active !== undefined) {
+      where.isActive = active === 'true';
+    }
 
     const [aliases, total] = await Promise.all([
       prisma.alias.findMany({
-        where: { userId },
+        where,
         orderBy: { [sortBy as string]: sortOrder },
         skip,
         take: Number(limit),
+        include: {
+          domain: { select: { id: true, domain: true } },
+        },
       }),
-      prisma.alias.count({ where: { userId } }),
+      prisma.alias.count({ where }),
     ]);
+
+    const totalPages = Math.ceil(total / Number(limit));
 
     res.json({
       success: true,
       data: {
-        aliases,
+        items: aliases,
         pagination: {
           page: Number(page),
           limit: Number(limit),
           total,
-          totalPages: Math.ceil(total / Number(limit)),
+          totalPages,
+          hasNext: Number(page) < totalPages,
+          hasPrev: Number(page) > 1,
         },
       },
     });
@@ -118,6 +685,9 @@ export async function getAliases(req: AuthenticatedRequest, res: Response): Prom
   }
 }
 
+/**
+ * Get single alias by ID
+ */
 export async function getAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
@@ -126,10 +696,12 @@ export async function getAlias(req: AuthenticatedRequest, res: Response): Promis
     const alias = await prisma.alias.findFirst({
       where: { id, userId },
       include: {
+        domain: { select: { id: true, domain: true } },
         emailLogs: {
           orderBy: { createdAt: 'desc' },
-          take: 10,
+          take: 20,
         },
+        blockedSenders: true,
       },
     });
 
@@ -154,13 +726,15 @@ export async function getAlias(req: AuthenticatedRequest, res: Response): Promis
   }
 }
 
+/**
+ * Update alias
+ */
 export async function updateAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
-    const { label, description, isActive }: UpdateAliasInput = req.body;
+    const { label, description, isActive, replyEnabled, expiresAt }: UpdateAliasInput = req.body;
 
-    // Check ownership
     const existing = await prisma.alias.findFirst({
       where: { id, userId },
     });
@@ -173,21 +747,32 @@ export async function updateAlias(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    // Update alias
-    const updatedAlias = await prisma.alias.update({
+    const updated = await prisma.alias.update({
       where: { id },
       data: {
         ...(label !== undefined && { label }),
         ...(description !== undefined && { description }),
         ...(isActive !== undefined && { isActive }),
+        ...(replyEnabled !== undefined && { replyEnabled }),
+        ...(expiresAt !== undefined && { expiresAt }),
+      },
+      include: {
+        domain: { select: { id: true, domain: true } },
       },
     });
 
-    logger.info(`Alias updated: ${updatedAlias.fullAddress}`);
+    await invalidateAliasCache(existing.alias);
+    await triggerWebhooks(userId, 'alias.updated', {
+      aliasId: updated.id,
+      alias: updated.fullAddress,
+      changes: { label, description, isActive, replyEnabled },
+    });
+
+    logger.info(`Alias updated: ${updated.fullAddress}`);
 
     res.json({
       success: true,
-      data: updatedAlias,
+      data: updated,
       message: 'Alias updated successfully',
     });
   } catch (error) {
@@ -199,12 +784,14 @@ export async function updateAlias(req: AuthenticatedRequest, res: Response): Pro
   }
 }
 
+/**
+ * Delete alias
+ */
 export async function deleteAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    // Check ownership
     const existing = await prisma.alias.findFirst({
       where: { id, userId },
     });
@@ -217,9 +804,17 @@ export async function deleteAlias(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    // Delete alias
-    await prisma.alias.delete({
-      where: { id },
+    await prisma.alias.delete({ where: { id } });
+
+    await prisma.domain.update({
+      where: { id: existing.domainId },
+      data: { aliasCount: { decrement: 1 } },
+    });
+
+    await invalidateAliasCache(existing.alias);
+    await triggerWebhooks(userId, 'alias.deleted', {
+      aliasId: existing.id,
+      alias: existing.fullAddress,
     });
 
     logger.info(`Alias deleted: ${existing.fullAddress}`);
@@ -237,12 +832,14 @@ export async function deleteAlias(req: AuthenticatedRequest, res: Response): Pro
   }
 }
 
+/**
+ * Toggle alias active status
+ */
 export async function toggleAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    // Check ownership
     const existing = await prisma.alias.findFirst({
       where: { id, userId },
     });
@@ -255,18 +852,20 @@ export async function toggleAlias(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    // Toggle active status
-    const updatedAlias = await prisma.alias.update({
+    const updated = await prisma.alias.update({
       where: { id },
       data: { isActive: !existing.isActive },
+      include: {
+        domain: { select: { id: true, domain: true } },
+      },
     });
 
-    logger.info(`Alias toggled: ${updatedAlias.fullAddress} -> ${updatedAlias.isActive ? 'active' : 'inactive'}`);
+    await invalidateAliasCache(existing.alias);
 
     res.json({
       success: true,
-      data: updatedAlias,
-      message: `Alias ${updatedAlias.isActive ? 'activated' : 'deactivated'} successfully`,
+      data: updated,
+      message: `Alias ${updated.isActive ? 'activated' : 'deactivated'} successfully`,
     });
   } catch (error) {
     logger.error('Toggle alias error:', error);
@@ -277,9 +876,17 @@ export async function toggleAlias(req: AuthenticatedRequest, res: Response): Pro
   }
 }
 
+/**
+ * Get user statistics
+ */
 export async function getStats(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { maxAliases: true },
+    });
 
     const [totalAliases, activeAliases, forwardStats, recentActivity] = await Promise.all([
       prisma.alias.count({ where: { userId } }),
@@ -310,7 +917,7 @@ export async function getStats(req: AuthenticatedRequest, res: Response): Promis
         activeAliases,
         inactiveAliases: totalAliases - activeAliases,
         totalForwarded: forwardStats._sum.forwardCount || 0,
-        maxAliases: MAX_ALIASES,
+        maxAliases: user?.maxAliases || MAX_ALIASES_PER_USER,
         recentActivity,
       },
     });
@@ -323,36 +930,39 @@ export async function getStats(req: AuthenticatedRequest, res: Response): Promis
   }
 }
 
+/**
+ * Get email logs for user
+ */
 export async function getEmailLogs(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
-    const { page = 1, limit = 20 } = req.query;
+    const { page = 1, limit = 20, aliasId, status } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
+    const where: any = { userId };
+
+    if (aliasId) where.aliasId = aliasId;
+    if (status) where.status = status;
 
     const [logs, total] = await Promise.all([
       prisma.emailLog.findMany({
-        where: { userId },
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: Number(limit),
         include: {
           alias: {
-            select: {
-              alias: true,
-              fullAddress: true,
-              label: true,
-            },
+            select: { alias: true, fullAddress: true, label: true },
           },
         },
       }),
-      prisma.emailLog.count({ where: { userId } }),
+      prisma.emailLog.count({ where }),
     ]);
 
     res.json({
       success: true,
       data: {
-        logs,
+        items: logs,
         pagination: {
           page: Number(page),
           limit: Number(limit),
