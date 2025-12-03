@@ -6,6 +6,9 @@ import logger from '../utils/logger';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'default-secret-change-me';
 
+/**
+ * Authenticate requests using JWT token
+ */
 export async function authenticate(
   req: AuthenticatedRequest,
   res: Response,
@@ -30,7 +33,7 @@ export async function authenticate(
       // Verify user still exists and is active
       const user = await prisma.user.findUnique({
         where: { id: decoded.id },
-        select: { id: true, email: true, isActive: true },
+        select: { id: true, email: true, isActive: true, isAdmin: true },
       });
 
       if (!user || !user.isActive) {
@@ -44,6 +47,7 @@ export async function authenticate(
       req.user = {
         id: user.id,
         email: user.email,
+        isAdmin: user.isAdmin,
       };
 
       next();
@@ -71,11 +75,54 @@ export async function authenticate(
   }
 }
 
-export function generateToken(payload: { id: string; email: string }): string {
+/**
+ * Optional authentication - doesn't fail if no token provided
+ */
+export async function optionalAuthenticate(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    next();
+    return;
+  }
+
+  // If token is provided, validate it
+  await authenticate(req, res, next);
+}
+
+/**
+ * Require admin privileges
+ */
+export function requireAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): void {
+  if (!req.user?.isAdmin) {
+    res.status(403).json({
+      success: false,
+      error: 'Admin access required',
+    });
+    return;
+  }
+  next();
+}
+
+/**
+ * Generate JWT token
+ */
+export function generateToken(payload: { id: string; email: string; isAdmin: boolean }): string {
   const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
   return jwt.sign(payload, JWT_SECRET, { expiresIn });
 }
 
+/**
+ * Verify JWT token
+ */
 export function verifyToken(token: string): JwtPayload | null {
   try {
     return jwt.verify(token, JWT_SECRET) as JwtPayload;

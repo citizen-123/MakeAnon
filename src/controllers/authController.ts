@@ -3,13 +3,26 @@ import bcrypt from 'bcryptjs';
 import prisma from '../services/database';
 import { generateToken } from '../middleware/auth';
 import { AuthenticatedRequest } from '../types';
+import { isValidEmail } from '../utils/helpers';
 import logger from '../utils/logger';
 
 const SALT_ROUNDS = 12;
 
+/**
+ * Sign up for an account
+ * Password is optional - only required for private alias management
+ */
 export async function signup(req: Request, res: Response): Promise<void> {
   try {
     const { email, password, name } = req.body;
+
+    if (!email || !isValidEmail(email)) {
+      res.status(400).json({
+        success: false,
+        error: 'Please provide a valid email address',
+      });
+      return;
+    }
 
     // Check if user already exists
     const existingUser = await prisma.user.findUnique({
@@ -17,6 +30,39 @@ export async function signup(req: Request, res: Response): Promise<void> {
     });
 
     if (existingUser) {
+      // If user exists but has no password and one is being set
+      if (!existingUser.password && password) {
+        const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+        const user = await prisma.user.update({
+          where: { id: existingUser.id },
+          data: {
+            password: hashedPassword,
+            name: name || existingUser.name,
+          },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            isAdmin: true,
+            maxAliases: true,
+            createdAt: true,
+          },
+        });
+
+        const token = generateToken({
+          id: user.id,
+          email: user.email,
+          isAdmin: user.isAdmin,
+        });
+
+        res.json({
+          success: true,
+          data: { user, token },
+          message: 'Password set successfully. You can now manage private aliases.',
+        });
+        return;
+      }
+
       res.status(409).json({
         success: false,
         error: 'An account with this email already exists',
@@ -24,8 +70,12 @@ export async function signup(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+    // Hash password if provided
+    const hashedPassword = password ? await bcrypt.hash(password, SALT_ROUNDS) : null;
+
+    // Check if this should be an admin (first user or configured admin)
+    const isFirstUser = (await prisma.user.count()) === 0;
+    const isConfiguredAdmin = email.toLowerCase() === process.env.ADMIN_EMAIL?.toLowerCase();
 
     // Create user
     const user = await prisma.user.create({
@@ -33,27 +83,33 @@ export async function signup(req: Request, res: Response): Promise<void> {
         email: email.toLowerCase(),
         password: hashedPassword,
         name: name || null,
+        isAdmin: isFirstUser || isConfiguredAdmin,
       },
       select: {
         id: true,
         email: true,
         name: true,
+        isAdmin: true,
+        maxAliases: true,
         createdAt: true,
       },
     });
 
     // Generate token
-    const token = generateToken({ id: user.id, email: user.email });
+    const token = generateToken({
+      id: user.id,
+      email: user.email,
+      isAdmin: user.isAdmin,
+    });
 
-    logger.info(`New user registered: ${user.email}`);
+    logger.info(`New user registered: ${user.email}${user.isAdmin ? ' (admin)' : ''}`);
 
     res.status(201).json({
       success: true,
-      data: {
-        user,
-        token,
-      },
-      message: 'Account created successfully',
+      data: { user, token },
+      message: password
+        ? 'Account created successfully'
+        : 'Account created. Set a password to manage private aliases.',
     });
   } catch (error) {
     logger.error('Signup error:', error);
@@ -64,9 +120,20 @@ export async function signup(req: Request, res: Response): Promise<void> {
   }
 }
 
+/**
+ * Log in to an account
+ */
 export async function login(req: Request, res: Response): Promise<void> {
   try {
     const { email, password } = req.body;
+
+    if (!email) {
+      res.status(400).json({
+        success: false,
+        error: 'Email is required',
+      });
+      return;
+    }
 
     // Find user
     const user = await prisma.user.findUnique({
@@ -89,6 +156,15 @@ export async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    // Check if user has a password set
+    if (!user.password) {
+      res.status(401).json({
+        success: false,
+        error: 'No password set for this account. Please sign up with a password first.',
+      });
+      return;
+    }
+
     // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password);
 
@@ -101,7 +177,11 @@ export async function login(req: Request, res: Response): Promise<void> {
     }
 
     // Generate token
-    const token = generateToken({ id: user.id, email: user.email });
+    const token = generateToken({
+      id: user.id,
+      email: user.email,
+      isAdmin: user.isAdmin,
+    });
 
     logger.info(`User logged in: ${user.email}`);
 
@@ -112,6 +192,8 @@ export async function login(req: Request, res: Response): Promise<void> {
           id: user.id,
           email: user.email,
           name: user.name,
+          isAdmin: user.isAdmin,
+          maxAliases: user.maxAliases,
         },
         token,
       },
@@ -126,6 +208,9 @@ export async function login(req: Request, res: Response): Promise<void> {
   }
 }
 
+/**
+ * Get current user profile
+ */
 export async function getProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
@@ -136,11 +221,12 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
         id: true,
         email: true,
         name: true,
+        isAdmin: true,
+        emailVerified: true,
+        maxAliases: true,
         createdAt: true,
         _count: {
-          select: {
-            aliases: true,
-          },
+          select: { aliases: true },
         },
       },
     });
@@ -156,8 +242,14 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
     res.json({
       success: true,
       data: {
-        ...user,
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        isAdmin: user.isAdmin,
+        emailVerified: user.emailVerified,
+        maxAliases: user.maxAliases,
         aliasCount: user._count.aliases,
+        createdAt: user.createdAt,
       },
     });
   } catch (error) {
@@ -169,6 +261,9 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
   }
 }
 
+/**
+ * Update user profile
+ */
 export async function updateProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
@@ -181,6 +276,7 @@ export async function updateProfile(req: AuthenticatedRequest, res: Response): P
         id: true,
         email: true,
         name: true,
+        isAdmin: true,
         createdAt: true,
       },
     });
@@ -199,10 +295,21 @@ export async function updateProfile(req: AuthenticatedRequest, res: Response): P
   }
 }
 
+/**
+ * Set or change password
+ */
 export async function changePassword(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
     const { currentPassword, newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 8) {
+      res.status(400).json({
+        success: false,
+        error: 'New password must be at least 8 characters',
+      });
+      return;
+    }
 
     // Get current user with password
     const user = await prisma.user.findUnique({
@@ -217,15 +324,24 @@ export async function changePassword(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
-    // Verify current password
-    const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+    // If user has an existing password, verify it
+    if (user.password) {
+      if (!currentPassword) {
+        res.status(400).json({
+          success: false,
+          error: 'Current password is required',
+        });
+        return;
+      }
 
-    if (!isValidPassword) {
-      res.status(401).json({
-        success: false,
-        error: 'Current password is incorrect',
-      });
-      return;
+      const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+      if (!isValidPassword) {
+        res.status(401).json({
+          success: false,
+          error: 'Current password is incorrect',
+        });
+        return;
+      }
     }
 
     // Hash new password
@@ -237,11 +353,11 @@ export async function changePassword(req: AuthenticatedRequest, res: Response): 
       data: { password: hashedPassword },
     });
 
-    logger.info(`Password changed for user: ${user.email}`);
+    logger.info(`Password ${user.password ? 'changed' : 'set'} for user: ${user.email}`);
 
     res.json({
       success: true,
-      message: 'Password changed successfully',
+      message: user.password ? 'Password changed successfully' : 'Password set successfully',
     });
   } catch (error) {
     logger.error('Change password error:', error);
@@ -252,10 +368,13 @@ export async function changePassword(req: AuthenticatedRequest, res: Response): 
   }
 }
 
+/**
+ * Delete account
+ */
 export async function deleteAccount(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
-    const { password } = req.body;
+    const { password, confirmEmail } = req.body;
 
     // Get current user
     const user = await prisma.user.findUnique({
@@ -270,18 +389,36 @@ export async function deleteAccount(req: AuthenticatedRequest, res: Response): P
       return;
     }
 
-    // Verify password
-    const isValidPassword = await bcrypt.compare(password, user.password);
+    // Verify by password or email confirmation
+    if (user.password) {
+      if (!password) {
+        res.status(400).json({
+          success: false,
+          error: 'Password is required to delete account',
+        });
+        return;
+      }
 
-    if (!isValidPassword) {
-      res.status(401).json({
-        success: false,
-        error: 'Password is incorrect',
-      });
-      return;
+      const isValidPassword = await bcrypt.compare(password, user.password);
+      if (!isValidPassword) {
+        res.status(401).json({
+          success: false,
+          error: 'Password is incorrect',
+        });
+        return;
+      }
+    } else {
+      // For passwordless accounts, require email confirmation
+      if (confirmEmail?.toLowerCase() !== user.email) {
+        res.status(400).json({
+          success: false,
+          error: 'Please confirm by entering your email address',
+        });
+        return;
+      }
     }
 
-    // Delete user (cascades to aliases)
+    // Delete user (cascades to aliases via Prisma)
     await prisma.user.delete({
       where: { id: userId },
     });

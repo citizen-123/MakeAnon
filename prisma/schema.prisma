@@ -1,78 +1,281 @@
-// Prisma schema for Emask - Email Masking Service
+// Prisma schema for Emask - Email Masking Service (Multi-tenant Production)
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  name      String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// Available email domains for aliases
+model Domain {
+  id          String   @id @default(uuid())
+  domain      String   @unique // e.g., "mask.example.com"
+  description String?
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  isPublic    Boolean  @default(true) // Can be used by anyone
 
-  aliases   Alias[]
-  emailLogs EmailLog[]
+  // Stats
+  aliasCount  Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  aliases     Alias[]
+
+  @@index([isActive])
+  @@index([isPublic])
+  @@map("domains")
+}
+
+// Optional user accounts (for private alias management)
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  password      String?  // Optional - only required for private aliases
+  name          String?
+  isActive      Boolean  @default(true)
+  isAdmin       Boolean  @default(false)
+  emailVerified Boolean  @default(false)
+
+  // Limits
+  maxAliases    Int      @default(100)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  aliases       Alias[]
+  emailLogs     EmailLog[]
+  webhooks      Webhook[]
+  apiKeys       ApiKey[]
 
   @@map("users")
 }
 
-model Alias {
+// API Keys for programmatic access
+model ApiKey {
   id          String   @id @default(uuid())
-  alias       String   @unique // The masked email prefix (e.g., "abc123")
-  fullAddress String   @unique // Full alias email (e.g., "abc123@mask.example.com")
-  label       String?  // User-friendly label (e.g., "Shopping Sites")
-  description String?  // Optional description
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String
+  keyHash     String   @unique // Hashed API key
+  keyPrefix   String   // First 8 chars for identification
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
   isActive    Boolean  @default(true)
 
-  // Statistics
-  forwardCount  Int    @default(0)
-  lastForwardAt DateTime?
+  // Permissions
+  scopes      String[] // ["aliases:read", "aliases:write", "logs:read"]
 
-  // Ownership
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  emailLogs EmailLog[]
+  createdAt   DateTime @default(now())
 
   @@index([userId])
+  @@index([keyHash])
+  @@map("api_keys")
+}
+
+// Email verification tokens
+model VerificationToken {
+  id          String   @id @default(uuid())
+  email       String
+  token       String   @unique
+  type        String   // "email_verify", "alias_verify", "password_reset", "management"
+  metadata    String?  // JSON string for additional data
+  expiresAt   DateTime
+  usedAt      DateTime?
+
+  createdAt   DateTime @default(now())
+
+  @@index([email])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("verification_tokens")
+}
+
+// Email aliases - can be public or private
+model Alias {
+  id            String   @id @default(uuid())
+  alias         String   // The masked email prefix (e.g., "abc123")
+  domainId      String
+  domain        Domain   @relation(fields: [domainId], references: [id])
+  fullAddress   String   @unique // Full alias email (e.g., "abc123@mask.example.com")
+
+  // Destination
+  destinationEmail String // Real email to forward to
+  emailVerified    Boolean @default(false)
+
+  // Metadata
+  label         String?  // User-friendly label
+  description   String?
+  isActive      Boolean  @default(true)
+  isPrivate     Boolean  @default(false) // Private aliases require auth to manage
+
+  // Security - management token for public aliases
+  managementToken String?  @unique
+
+  // Statistics
+  forwardCount    Int      @default(0)
+  lastForwardAt   DateTime?
+  blockedCount    Int      @default(0)
+
+  // Reply support - allows replying through the alias
+  replyEnabled    Boolean  @default(true)
+  replyPrefix     String?  @unique // Unique prefix for reply routing
+
+  // Optional owner (for private aliases)
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  expiresAt     DateTime? // Optional expiration
+
+  emailLogs     EmailLog[]
+  blockedSenders BlockedSender[]
+  rules         AliasRule[]
+
+  @@unique([alias, domainId])
+  @@index([destinationEmail])
+  @@index([userId])
   @@index([alias])
+  @@index([domainId])
+  @@index([isActive])
+  @@index([expiresAt])
+  @@index([managementToken])
   @@map("aliases")
 }
 
-model EmailLog {
+// Rules for alias behavior
+model AliasRule {
   id        String   @id @default(uuid())
+  aliasId   String
+  alias     Alias    @relation(fields: [aliasId], references: [id], onDelete: Cascade)
 
-  // Email details
-  fromEmail String
-  toAlias   String
-  subject   String?
-
-  // Status
-  status    String   @default("received") // received, forwarded, failed, blocked
-  error     String?
-
-  // Relations
-  aliasId   String?
-  alias     Alias?   @relation(fields: [aliasId], references: [id], onDelete: SetNull)
-
-  userId    String?
-  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // Rule type: block_sender, block_subject, forward_to, auto_reply
+  type      String
+  condition String   // Pattern or value to match
+  action    String   // Action to take
+  priority  Int      @default(0)
+  isActive  Boolean  @default(true)
 
   createdAt DateTime @default(now())
 
   @@index([aliasId])
+  @@map("alias_rules")
+}
+
+// Blocked senders per alias
+model BlockedSender {
+  id        String   @id @default(uuid())
+  aliasId   String
+  alias     Alias    @relation(fields: [aliasId], references: [id], onDelete: Cascade)
+
+  email     String   // Blocked email address or pattern
+  isPattern Boolean  @default(false) // If true, email is a regex pattern
+  reason    String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([aliasId, email])
+  @@index([aliasId])
+  @@map("blocked_senders")
+}
+
+// Email activity logs
+model EmailLog {
+  id          String   @id @default(uuid())
+
+  // Email details
+  fromEmail   String
+  toAlias     String
+  subject     String?
+  messageId   String?
+
+  // Size info
+  sizeBytes   Int?
+
+  // Status: received, forwarded, replied, failed, blocked, spam
+  status      String   @default("received")
+  error       String?
+
+  // Processing time in ms
+  processingTime Int?
+
+  // Relations
+  aliasId     String?
+  alias       Alias?   @relation(fields: [aliasId], references: [id], onDelete: SetNull)
+
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime @default(now())
+
+  @@index([aliasId])
   @@index([userId])
   @@index([createdAt])
+  @@index([status])
+  @@index([fromEmail])
   @@map("email_logs")
+}
+
+// Rate limiting tracking
+model RateLimit {
+  id          String   @id @default(uuid())
+  key         String   @unique // e.g., "create:user@example.com" or "forward:alias123"
+  count       Int      @default(1)
+  windowStart DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([key])
+  @@index([expiresAt])
+  @@map("rate_limits")
+}
+
+// Webhook configurations for users
+model Webhook {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  url         String
+  secret      String   // For HMAC signing
+  events      String[] // ["email.received", "email.forwarded", "alias.created"]
+  isActive    Boolean  @default(true)
+
+  // Stats
+  lastTriggered DateTime?
+  failureCount  Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@map("webhooks")
+}
+
+// Global statistics (cached/aggregated)
+model Stats {
+  id              String   @id @default("global")
+  totalAliases    BigInt   @default(0)
+  activeAliases   BigInt   @default(0)
+  totalForwarded  BigInt   @default(0)
+  totalBlocked    BigInt   @default(0)
+  totalUsers      BigInt   @default(0)
+
+  updatedAt       DateTime @updatedAt
+
+  @@map("stats")
+}
+
+// System configuration
+model SystemConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("system_config")
 }
