@@ -5,14 +5,18 @@ import logger from '../utils/logger';
 
 // Create reusable transporter
 const createTransporter = () => {
+  const hasAuth = process.env.SMTP_OUTBOUND_USER && process.env.SMTP_OUTBOUND_PASS;
+
   return nodemailer.createTransport({
     host: process.env.SMTP_OUTBOUND_HOST || 'smtp.gmail.com',
     port: parseInt(process.env.SMTP_OUTBOUND_PORT || '587'),
     secure: process.env.SMTP_OUTBOUND_SECURE === 'true',
-    auth: {
-      user: process.env.SMTP_OUTBOUND_USER,
-      pass: process.env.SMTP_OUTBOUND_PASS,
-    },
+    ...(hasAuth && {
+      auth: {
+        user: process.env.SMTP_OUTBOUND_USER,
+        pass: process.env.SMTP_OUTBOUND_PASS,
+      },
+    }),
     pool: true,
     maxConnections: 5,
     maxMessages: 100,

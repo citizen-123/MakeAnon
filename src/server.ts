@@ -28,13 +28,13 @@ async function main() {
     await initializeDomainsFromEnv();
 
     // Verify outbound SMTP connection
-    if (process.env.SMTP_OUTBOUND_USER && process.env.SMTP_OUTBOUND_PASS) {
+    if (process.env.SMTP_OUTBOUND_HOST) {
       const smtpConnected = await verifyConnection();
       if (!smtpConnected) {
         logger.warn('Outbound SMTP connection could not be verified. Email forwarding may not work.');
       }
     } else {
-      logger.warn('Outbound SMTP credentials not configured. Email forwarding will not work.');
+      logger.warn('Outbound SMTP host not configured. Email forwarding will not work.');
     }
 
     // Start HTTP API server

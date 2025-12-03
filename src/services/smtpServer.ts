@@ -187,13 +187,7 @@ async function processEmail(
         continue;
       }
 
-      // Check if alias is verified and active
-      if (!alias.emailVerified) {
-        logger.info(`Alias not verified: ${alias.fullAddress}`);
-        await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Alias not verified', Date.now() - startTime);
-        continue;
-      }
-
+      // Check if alias is active
       if (!alias.isActive) {
         logger.info(`Alias is inactive: ${alias.fullAddress}`);
         await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Alias is inactive', Date.now() - startTime);

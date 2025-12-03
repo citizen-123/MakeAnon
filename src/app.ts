@@ -3,8 +3,10 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
+import swaggerUi from 'swagger-ui-express';
 import routes from './routes';
 import { globalErrorHandler, notFoundHandler } from './middleware/errorHandler';
+import { swaggerSpec } from './config/swagger';
 import logger from './utils/logger';
 
 const app = express();
@@ -46,6 +48,18 @@ app.use((req, res, next) => {
     logger.debug(`${req.method} ${req.path} ${res.statusCode} - ${duration}ms`);
   });
   next();
+});
+
+// Swagger API documentation
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'MakeAnon API Documentation',
+}));
+
+// Serve OpenAPI spec as JSON
+app.get('/api/docs.json', (_req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpec);
 });
 
 // API routes
