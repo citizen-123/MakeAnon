@@ -155,7 +155,7 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
     const managementToken = generateManagementToken();
     const replyPrefix = generateReplyPrefix();
 
-    // Create alias
+    // Create alias - always active by default, verification is optional
     const newAlias = await prisma.alias.create({
       data: {
         alias: aliasName,
@@ -165,7 +165,7 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
         emailVerified: !REQUIRE_VERIFICATION,
         label: label || null,
         description: description || null,
-        isActive: !REQUIRE_VERIFICATION, // Inactive until verified
+        isActive: true, // Always active by default
         isPrivate: false,
         managementToken,
         replyPrefix,

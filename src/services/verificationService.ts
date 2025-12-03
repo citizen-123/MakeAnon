@@ -143,7 +143,7 @@ export async function sendAliasVerificationEmail(
   const verificationUrl = createVerificationUrl(tokenResult.token);
   const managementUrl = `${process.env.BASE_URL || 'https://makeanon.info'}/#manage?token=${managementToken}`;
 
-  const subject = `Verify your email alias: ${aliasAddress}`;
+  const subject = `Action Required: Verify your email alias within 72 hours - ${aliasAddress}`;
   const text = `
 Hello,
 
@@ -152,20 +152,20 @@ You (or someone) created an email alias that forwards to this address:
 Alias: ${aliasAddress}
 Forwards to: ${destinationEmail}
 
-To activate this alias, please verify your email by clicking the link below:
+Your alias is ACTIVE and ready to forward emails!
 
-${verificationUrl}
+IMPORTANT: Verify your email within 72 hours or your alias will be automatically deleted.
 
-This link will expire in ${TOKEN_EXPIRY_HOURS} hours.
+Click here to verify: ${verificationUrl}
 
-IMPORTANT: Save your management token to manage this alias later:
+SAVE YOUR MANAGEMENT TOKEN:
 
 Management Token: ${managementToken}
 Management URL: ${managementUrl}
 
 With this token you can enable/disable the alias, block senders, or delete it.
 
-If you did not create this alias, you can safely ignore this email.
+If you did not create this alias, you can safely ignore this email and the alias will be deleted after 72 hours.
 
 --
 MakeAnon - Email Masking Service
@@ -183,6 +183,8 @@ MakeAnon - Email Masking Service
     .alias-box { background: white; padding: 15px; border-radius: 8px; margin: 15px 0; border: 1px solid #e5e7eb; }
     .button { display: inline-block; background: #4F46E5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
     .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 14px; }
+    .warning { background: #fef2f2; border: 1px solid #fecaca; padding: 15px; border-radius: 8px; margin: 15px 0; }
+    .success { background: #ecfdf5; border: 1px solid #6ee7b7; padding: 15px; border-radius: 8px; margin: 15px 0; }
   </style>
 </head>
 <body>
@@ -199,15 +201,17 @@ MakeAnon - Email Masking Service
         <p><strong>Forwards to:</strong> ${destinationEmail}</p>
       </div>
 
-      <p>To activate this alias, please verify your email:</p>
+      <div class="success">
+        <p style="margin: 0; color: #065f46; font-weight: 600;">Your alias is ACTIVE and ready to forward emails!</p>
+      </div>
+
+      <div class="warning">
+        <p style="margin: 0 0 10px 0; color: #dc2626; font-weight: 600;">Action Required: Verify within 72 hours</p>
+        <p style="margin: 0; color: #7f1d1d; font-size: 14px;">Unverified aliases are automatically deleted after 72 hours. Click the button below to keep your alias.</p>
+      </div>
 
       <p style="text-align: center;">
-        <a href="${verificationUrl}" class="button">Verify Email</a>
-      </p>
-
-      <p style="font-size: 14px; color: #6b7280;">
-        This link will expire in ${TOKEN_EXPIRY_HOURS} hours.<br>
-        If you did not create this alias, you can safely ignore this email.
+        <a href="${verificationUrl}" class="button">Verify Email & Keep Alias</a>
       </p>
 
       <div class="alias-box" style="margin-top: 20px; background: #fef3c7; border-color: #f59e0b;">
@@ -215,6 +219,10 @@ MakeAnon - Email Masking Service
         <p style="margin: 0 0 5px 0;"><strong>Token:</strong> <code style="background: #fff; padding: 2px 6px; border-radius: 4px; font-size: 12px;">${managementToken}</code></p>
         <p style="margin: 0;"><a href="${managementUrl}" style="color: #4F46E5;">Manage this alias</a></p>
       </div>
+
+      <p style="font-size: 13px; color: #6b7280; margin-top: 20px;">
+        If you did not create this alias, you can safely ignore this email and it will be automatically deleted after 72 hours.
+      </p>
     </div>
     <div class="footer">
       <p>MakeAnon - Email Masking Service</p>
