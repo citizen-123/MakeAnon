@@ -82,14 +82,63 @@ POST /api/v1/management-link     # Request management link resend
 
 ## Self-Hosting
 
-### Requirements
+### Docker (Recommended)
 
-- Node.js 18+
-- PostgreSQL 14+
-- Redis (optional, for caching)
-- Domain with MX records pointing to your server
+The easiest way to deploy MakeAnon is with Docker Compose. This includes PostgreSQL, Redis, and optionally Caddy for HTTPS.
 
-### Installation
+```bash
+git clone https://github.com/citizen-123/MakeAnon.git
+cd MakeAnon
+
+# Configure environment
+cp .env.docker.example .env
+# Edit .env with your settings (DB_PASSWORD, JWT_SECRET, SMTP settings)
+
+# Deploy
+./scripts/deploy.sh
+
+# Or with Caddy for automatic HTTPS:
+./scripts/deploy.sh --with-caddy
+```
+
+#### Docker Commands
+
+```bash
+# View logs
+docker compose logs -f
+
+# Stop services
+docker compose down
+
+# Restart
+docker compose restart
+
+# Backup database
+./scripts/backup.sh
+
+# Restore database
+./scripts/restore.sh backups/makeanon_YYYYMMDD_HHMMSS.sql.gz
+```
+
+#### Required Environment Variables
+
+```env
+# Database password (generate a strong password)
+DB_PASSWORD=your-secure-password
+
+# JWT secret (min 32 characters)
+JWT_SECRET=your-random-string-at-least-32-chars
+
+# SMTP for sending/forwarding emails
+SMTP_OUTBOUND_HOST=smtp.gmail.com
+SMTP_OUTBOUND_PORT=587
+SMTP_OUTBOUND_USER=your@gmail.com
+SMTP_OUTBOUND_PASS=your-app-password
+```
+
+### Manual Installation
+
+If you prefer not to use Docker:
 
 ```bash
 git clone https://github.com/citizen-123/MakeAnon.git
@@ -105,41 +154,7 @@ npm run build
 npm start
 ```
 
-### Configuration
-
-Key environment variables:
-
-```env
-# Server
-PORT=3000
-BASE_URL=https://yourdomain.com
-
-# Database
-DATABASE_URL="postgresql://user:pass@localhost:5432/makeanon"
-
-# Redis (optional)
-REDIS_URL="redis://localhost:6379"
-
-# Email domains (comma-separated, first is default)
-EMAIL_DOMAINS=alias.example.com,mask.example.com
-
-# SMTP for receiving
-SMTP_PORT=25
-SMTP_HOST=0.0.0.0
-
-# SMTP for sending (forwarding)
-SMTP_OUTBOUND_HOST=smtp.gmail.com
-SMTP_OUTBOUND_PORT=587
-SMTP_OUTBOUND_USER=your@gmail.com
-SMTP_OUTBOUND_PASS=app-password
-SMTP_FROM_ADDRESS=noreply@yourdomain.com
-SMTP_FROM_NAME=MakeAnon
-
-# Limits
-MAX_ALIASES_PER_EMAIL=10
-ALIAS_CREATION_LIMIT_PER_HOUR=10
-FORWARD_LIMIT_PER_MINUTE=30
-```
+Requires: Node.js 18+, PostgreSQL 14+, Redis (optional)
 
 ### DNS Setup
 

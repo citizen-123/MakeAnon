@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  # Main application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: makeanon-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"   # HTTP API
+      - "25:25"       # SMTP (requires root or CAP_NET_BIND_SERVICE)
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DATABASE_URL=postgresql://makeanon:${DB_PASSWORD}@postgres:5432/makeanon
+      - REDIS_URL=redis://redis:6379
+      - BASE_URL=${BASE_URL:-https://makeanon.info}
+      - JWT_SECRET=${JWT_SECRET}
+      - EMAIL_DOMAINS=${EMAIL_DOMAINS:-makeanon.info,makeanon.xyz,iamanon.lol}
+      - SMTP_PORT=25
+      - SMTP_HOST=0.0.0.0
+      - SMTP_ENABLED=true
+      - SMTP_OUTBOUND_HOST=${SMTP_OUTBOUND_HOST}
+      - SMTP_OUTBOUND_PORT=${SMTP_OUTBOUND_PORT:-587}
+      - SMTP_OUTBOUND_SECURE=${SMTP_OUTBOUND_SECURE:-false}
+      - SMTP_OUTBOUND_USER=${SMTP_OUTBOUND_USER}
+      - SMTP_OUTBOUND_PASS=${SMTP_OUTBOUND_PASS}
+      - SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS:-noreply@makeanon.info}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-MakeAnon}
+      - MAX_ALIASES_PER_EMAIL=${MAX_ALIASES_PER_EMAIL:-10}
+      - ALIAS_CREATION_LIMIT_PER_HOUR=${ALIAS_CREATION_LIMIT_PER_HOUR:-10}
+      - FORWARD_LIMIT_PER_MINUTE=${FORWARD_LIMIT_PER_MINUTE:-30}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    cap_add:
+      - NET_BIND_SERVICE
+    networks:
+      - makeanon-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:16-alpine
+    container_name: makeanon-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=makeanon
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=makeanon
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - makeanon-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U makeanon -d makeanon"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Redis for caching and rate limiting
+  redis:
+    image: redis:7-alpine
+    container_name: makeanon-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - makeanon-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # Caddy reverse proxy (optional - for HTTPS)
+  caddy:
+    image: caddy:2-alpine
+    container_name: makeanon-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-makeanon.info}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+    volumes:
+      - ./Caddyfile.docker:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - makeanon-network
+    depends_on:
+      - app
+    profiles:
+      - with-caddy
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+
+networks:
+  makeanon-network:
+    driver: bridge
