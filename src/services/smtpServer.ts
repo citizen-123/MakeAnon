@@ -4,6 +4,7 @@ import prisma from './database';
 import { forwardEmail, sendReplyEmail } from './emailService';
 import { checkRateLimit, getCachedAlias, cacheAlias } from './redis';
 import { parseAliasEmail, parseEmailAddress, isReplyAddress, getEmailDomains } from '../utils/helpers';
+import { decryptEmail, EncryptedData } from '../utils/encryption';
 import logger from '../utils/logger';
 
 let smtpServer: SMTPServer | null = null;
@@ -37,6 +38,10 @@ interface AliasWithUser {
   alias: string;
   fullAddress: string;
   destinationEmail: string;
+  destinationIv: string | null;
+  destinationSalt: string | null;
+  destinationAuthTag: string | null;
+  isEncrypted: boolean;
   emailVerified: boolean;
   isActive: boolean;
   isPrivate: boolean;
@@ -45,6 +50,23 @@ interface AliasWithUser {
   userId: string | null;
   domainId: string;
   blockedSenders: { email: string; isPattern: boolean }[];
+}
+
+/**
+ * Decrypt alias destination email if encrypted
+ */
+function getDestinationEmail(alias: AliasWithUser): string {
+  if (alias.isEncrypted && alias.destinationIv && alias.destinationSalt && alias.destinationAuthTag) {
+    const encryptedData: EncryptedData = {
+      ciphertext: alias.destinationEmail,
+      iv: alias.destinationIv,
+      salt: alias.destinationSalt,
+      authTag: alias.destinationAuthTag,
+    };
+    return decryptEmail(encryptedData, alias.id);
+  }
+  // Legacy unencrypted email
+  return alias.destinationEmail;
 }
 
 /**
@@ -68,6 +90,10 @@ async function lookupAlias(aliasName: string, domainName: string): Promise<Alias
       alias: true,
       fullAddress: true,
       destinationEmail: true,
+      destinationIv: true,
+      destinationSalt: true,
+      destinationAuthTag: true,
+      isEncrypted: true,
       emailVerified: true,
       isActive: true,
       isPrivate: true,
@@ -99,6 +125,10 @@ async function lookupAliasByReplyPrefix(replyPrefix: string): Promise<AliasWithU
       alias: true,
       fullAddress: true,
       destinationEmail: true,
+      destinationIv: true,
+      destinationSalt: true,
+      destinationAuthTag: true,
+      isEncrypted: true,
       emailVerified: true,
       isActive: true,
       isPrivate: true,
@@ -116,6 +146,23 @@ async function lookupAliasByReplyPrefix(replyPrefix: string): Promise<AliasWithU
 }
 
 /**
+ * Convert a glob pattern (with * and ?) to a safe regex.
+ * Only allows * (any chars) and ? (single char) as wildcards.
+ * All other characters are escaped to prevent ReDoS.
+ */
+function globToSafeRegex(pattern: string): RegExp {
+  const escaped = pattern
+    .split('')
+    .map(char => {
+      if (char === '*') return '.*';
+      if (char === '?') return '.';
+      return char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    })
+    .join('');
+  return new RegExp(`^${escaped}$`, 'i');
+}
+
+/**
  * Check if sender is blocked
  */
 function isSenderBlocked(
@@ -126,12 +173,8 @@ function isSenderBlocked(
 
   for (const blocked of blockedSenders) {
     if (blocked.isPattern) {
-      try {
-        const regex = new RegExp(blocked.email, 'i');
-        if (regex.test(sender)) return true;
-      } catch {
-        // Invalid regex, skip
-      }
+      const regex = globToSafeRegex(blocked.email);
+      if (regex.test(sender)) return true;
     } else if (blocked.email.toLowerCase() === sender) {
       return true;
     }
@@ -215,6 +258,9 @@ async function processEmail(
         continue;
       }
 
+      // Decrypt destination email for forwarding
+      const destinationEmail = getDestinationEmail(alias);
+
       // Forward the email
       const result = await forwardEmail(
         {
@@ -225,7 +271,7 @@ async function processEmail(
           html: parsed.html || undefined,
           messageId: parsed.messageId,
         },
-        alias.destinationEmail,
+        destinationEmail,
         alias.fullAddress,
         alias.replyEnabled ? alias.replyPrefix : null
       );
@@ -244,7 +290,8 @@ async function processEmail(
 
         await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'forwarded', alias.isPrivate, undefined, processingTime, result.messageId);
 
-        logger.info(`Email forwarded: ${alias.fullAddress} -> ${alias.destinationEmail} (${processingTime}ms)`);
+        // Log without exposing the real email
+        logger.info(`Email forwarded: ${alias.fullAddress} -> [encrypted] (${processingTime}ms)`);
       } else {
         await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'failed', alias.isPrivate, result.error, processingTime);
 
@@ -282,9 +329,10 @@ async function handleReply(
     return;
   }
 
-  // Verify the sender is the alias owner
-  if (fromAddress.toLowerCase() !== alias.destinationEmail.toLowerCase()) {
-    logger.warn(`Reply sender mismatch: expected ${alias.destinationEmail}, got ${fromAddress}`);
+  // Verify the sender is the alias owner (decrypt to check)
+  const destinationEmail = getDestinationEmail(alias);
+  if (fromAddress.toLowerCase() !== destinationEmail.toLowerCase()) {
+    logger.warn(`Reply sender mismatch for alias: ${alias.fullAddress}`);
     await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Reply sender mismatch', Date.now() - startTime);
     return;
   }

@@ -13,7 +13,12 @@ echo "Database is ready!"
 
 # Run database migrations
 echo "Running database migrations..."
-npx prisma migrate deploy
+if ! npx prisma migrate deploy; then
+  echo "ERROR: Database migration failed!"
+  echo "If this is a fresh install, ensure DATABASE_URL is correct."
+  echo "If upgrading, check for pending migrations."
+  exit 1
+fi
 
 echo "Starting application..."
 exec "$@"

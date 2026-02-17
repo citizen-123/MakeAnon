@@ -6,6 +6,9 @@ dist/
 
 # Environment files
 .env
+.env.*
+!.env.example
+!.env.docker.example
 .env.local
 .env.production
 
@@ -31,6 +34,12 @@ npm-debug.log*
 
 # Test coverage
 coverage/
+
+# DKIM private keys
+haraka/config/dkim/*/private
+
+# Haraka internal command key
+haraka/config/internalcmd_key
 
 # Temporary files
 tmp/

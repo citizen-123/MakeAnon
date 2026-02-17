@@ -80,8 +80,19 @@ model Alias {
   domain        Domain   @relation(fields: [domainId], references: [id])
   fullAddress   String   @unique // Full alias email (e.g., "abc123@mask.example.com")
 
-  // Destination
-  destinationEmail String // Real email to forward to
+  // Destination (encrypted)
+  // The real email is encrypted using AES-256-GCM with a key derived from MASTER_ENCRYPTION_KEY
+  // These fields store the encrypted data - the plaintext is NEVER stored in the database
+  destinationEmail    String   // Encrypted ciphertext (base64)
+  destinationIv       String?  // Initialization vector (base64)
+  destinationSalt     String?  // Salt for key derivation (base64)
+  destinationAuthTag  String?  // GCM authentication tag (base64)
+  isEncrypted         Boolean  @default(false) // Flag for migration - true if encrypted
+
+  // Hash of the destination email for counting/lookups without exposing the plaintext
+  // Uses SHA-256 with a pepper (MASTER_ENCRYPTION_KEY) so it can't be rainbow-tabled
+  destinationHash     String?  // SHA-256 hash for lookups
+
   emailVerified    Boolean @default(false)
 
   // Metadata
@@ -117,7 +128,7 @@ model Alias {
   blockedSenders BlockedSender[]
 
   @@unique([alias, domainId])
-  @@index([destinationEmail])
+  @@index([destinationHash])
   @@index([userId])
   @@index([alias])
   @@index([domainId])

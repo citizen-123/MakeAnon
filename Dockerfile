@@ -23,8 +23,8 @@ FROM node:20-alpine AS production
 
 WORKDIR /app
 
-# Install dumb-init for proper signal handling and netcat for health checks
-RUN apk add --no-cache dumb-init netcat-openbsd
+# Install dumb-init for proper signal handling, netcat for health checks, and openssl for Prisma
+RUN apk add --no-cache dumb-init netcat-openbsd openssl
 
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && \
@@ -44,9 +44,8 @@ COPY --from=builder /app/dist ./dist/
 # Copy public assets
 COPY public ./public/
 
-# Copy entrypoint script
-COPY scripts/docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Copy entrypoint script and ensure it's executable
+COPY --chmod=755 scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # Set ownership
 RUN chown -R nodejs:nodejs /app

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import prisma from '../services/database';
 import { getDefaultDomain, getDomainById } from '../services/domainService';
 import { sendAliasVerificationEmail, sendManagementLinkEmail } from '../services/verificationService';
@@ -15,6 +16,7 @@ import {
   isDisposableEmail,
   calculateExpiresAt,
 } from '../utils/helpers';
+import { encryptEmail, decryptEmail, hashEmail, EncryptedData } from '../utils/encryption';
 import logger from '../utils/logger';
 
 const MAX_ALIASES_PER_EMAIL = parseInt(process.env.MAX_ALIASES_PER_EMAIL || '10');
@@ -23,6 +25,25 @@ const ALIAS_CREATION_LIMIT = parseInt(process.env.ALIAS_CREATION_LIMIT_PER_HOUR 
 const ALLOW_CUSTOM_ALIASES = process.env.ALLOW_CUSTOM_ALIASES !== 'false';
 const REQUIRE_VERIFICATION = process.env.REQUIRE_EMAIL_VERIFICATION === 'true'; // Default to false
 const BLOCK_DISPOSABLE = process.env.BLOCK_DISPOSABLE_EMAILS === 'true';
+
+/**
+ * Strip encryption fields and decrypt destination email for API response
+ */
+function decryptAliasForResponse(alias: any): any {
+  let destinationEmail = alias.destinationEmail;
+  if (alias.isEncrypted && alias.destinationIv && alias.destinationSalt && alias.destinationAuthTag) {
+    const encryptedData: EncryptedData = {
+      ciphertext: alias.destinationEmail,
+      iv: alias.destinationIv,
+      salt: alias.destinationSalt,
+      authTag: alias.destinationAuthTag,
+    };
+    destinationEmail = decryptEmail(encryptedData, alias.id);
+  }
+
+  const { destinationIv, destinationSalt, destinationAuthTag, isEncrypted, destinationHash, ...safeAlias } = alias;
+  return { ...safeAlias, destinationEmail };
+}
 
 // ============================================================================
 // Public Alias Creation (No Auth Required)
@@ -67,9 +88,10 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Check alias limit per email
+    // Check alias limit per email (using hash for privacy)
+    const emailHash = hashEmail(email);
     const existingCount = await prisma.alias.count({
-      where: { destinationEmail: email, isPrivate: false },
+      where: { destinationHash: emailHash, isPrivate: false },
     });
 
     if (existingCount >= MAX_ALIASES_PER_EMAIL) {
@@ -154,13 +176,25 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
     const managementToken = generateManagementToken();
     const replyPrefix = generateReplyPrefix();
 
+    // Generate a temporary ID for encryption (we'll use the actual ID after creation)
+    const tempId = crypto.randomUUID();
+
+    // Encrypt the destination email
+    const encryptedData = encryptEmail(email, tempId);
+
     // Create alias - always active by default, verification is optional
     const newAlias = await prisma.alias.create({
       data: {
+        id: tempId, // Use the same ID we used for encryption
         alias: aliasName,
         domainId: domain.id,
         fullAddress,
-        destinationEmail: email,
+        destinationEmail: encryptedData.ciphertext,
+        destinationIv: encryptedData.iv,
+        destinationSalt: encryptedData.salt,
+        destinationAuthTag: encryptedData.authTag,
+        destinationHash: emailHash,
+        isEncrypted: true,
         emailVerified: !REQUIRE_VERIFICATION,
         label: label || null,
         description: description || null,
@@ -192,7 +226,7 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
       await sendManagementLinkEmail(email, fullAddress, createManagementUrl(managementToken));
     }
 
-    logger.info(`Public alias created: ${fullAddress} -> ${email}`);
+    logger.info(`Public alias created: ${fullAddress} -> [encrypted]`);
 
     res.status(201).json({
       success: true,
@@ -201,7 +235,7 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
         alias: newAlias.alias,
         fullAddress: newAlias.fullAddress,
         domain: newAlias.domain,
-        destinationEmail: newAlias.destinationEmail,
+        destinationEmail: email, // Return plaintext to the creator (they know their own email)
         emailVerified: newAlias.emailVerified,
         isActive: newAlias.isActive,
         label: newAlias.label,
@@ -261,6 +295,8 @@ export async function getAliasByToken(req: Request, res: Response): Promise<void
       return;
     }
 
+    const safeAlias = decryptAliasForResponse(alias);
+
     // Calculate scheduled deletion info
     let scheduledDeletion: { date: string; reason: string } | null = null;
 
@@ -285,7 +321,7 @@ export async function getAliasByToken(req: Request, res: Response): Promise<void
     res.json({
       success: true,
       data: {
-        ...alias,
+        ...safeAlias,
         scheduledDeletion,
       },
     });
@@ -350,7 +386,7 @@ export async function updateAliasByToken(req: Request, res: Response): Promise<v
 
     res.json({
       success: true,
-      data: updated,
+      data: decryptAliasForResponse(updated),
       message: 'Alias updated successfully',
     });
   } catch (error) {
@@ -611,12 +647,25 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
     const fullAddress = createFullAliasEmail(aliasName, domain.domain);
     const replyPrefix = generateReplyPrefix();
 
+    // Generate ID for encryption key derivation
+    const aliasId = crypto.randomUUID();
+
+    // Encrypt the destination email
+    const encryptedData = encryptEmail(email, aliasId);
+    const emailHash = hashEmail(email);
+
     const newAlias = await prisma.alias.create({
       data: {
+        id: aliasId,
         alias: aliasName,
         domainId: domain.id,
         fullAddress,
-        destinationEmail: email,
+        destinationEmail: encryptedData.ciphertext,
+        destinationIv: encryptedData.iv,
+        destinationSalt: encryptedData.salt,
+        destinationAuthTag: encryptedData.authTag,
+        destinationHash: emailHash,
+        isEncrypted: true,
         emailVerified: true, // Authenticated users are verified
         label: label || null,
         description: description || null,
@@ -640,9 +689,12 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
 
     logger.info(`Private alias created: ${fullAddress} for user ${req.user!.email}`);
 
+    const safeAlias = decryptAliasForResponse(newAlias);
+    // Override with the known plaintext email (we have it from the request)
+    safeAlias.destinationEmail = email;
     res.status(201).json({
       success: true,
-      data: newAlias,
+      data: safeAlias,
       message: 'Alias created successfully',
     });
   } catch (error) {
@@ -693,7 +745,7 @@ export async function getAliases(req: AuthenticatedRequest, res: Response): Prom
     res.json({
       success: true,
       data: {
-        items: aliases,
+        items: aliases.map(decryptAliasForResponse),
         pagination: {
           page: Number(page),
           limit: Number(limit),
@@ -743,7 +795,7 @@ export async function getAlias(req: AuthenticatedRequest, res: Response): Promis
 
     res.json({
       success: true,
-      data: alias,
+      data: decryptAliasForResponse(alias),
     });
   } catch (error) {
     logger.error('Get alias error:', error);
@@ -795,7 +847,7 @@ export async function updateAlias(req: AuthenticatedRequest, res: Response): Pro
 
     res.json({
       success: true,
-      data: updated,
+      data: decryptAliasForResponse(updated),
       message: 'Alias updated successfully',
     });
   } catch (error) {
@@ -883,7 +935,7 @@ export async function toggleAlias(req: AuthenticatedRequest, res: Response): Pro
 
     res.json({
       success: true,
-      data: updated,
+      data: decryptAliasForResponse(updated),
       message: `Alias ${updated.isActive ? 'activated' : 'deactivated'} successfully`,
     });
   } catch (error) {

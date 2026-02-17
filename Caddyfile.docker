@@ -38,6 +38,7 @@ api.{$DOMAIN:makeanon.info} {
         Access-Control-Allow-Origin "*"
         Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
         Access-Control-Allow-Headers "Authorization, Content-Type"
+        Access-Control-Max-Age "86400"
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
         -Server

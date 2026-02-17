@@ -69,7 +69,7 @@ app.use('/api/v1', routes);
 app.use(express.static(path.join(__dirname, '../public')));
 
 // Serve index.html for all non-API routes (SPA support)
-app.get('*', (req, res, next) => {
+app.get('/{*splat}', (req, res, next) => {
   // Skip API routes
   if (req.path.startsWith('/api/')) {
     return next();

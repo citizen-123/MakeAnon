@@ -8,6 +8,7 @@ import { startSmtpServer, stopSmtpServer } from './services/smtpServer';
 import { verifyConnection } from './services/emailService';
 import { connectRedis, disconnectRedis } from './services/redis';
 import { initializeDomainsFromEnv } from './services/domainService';
+import { verifyEncryptionSetup } from './utils/encryption';
 import prisma from './services/database';
 import logger from './utils/logger';
 
@@ -17,6 +18,19 @@ const HOST = process.env.HOST || '0.0.0.0';
 async function main() {
   try {
     logger.info('Starting MakeAnon Email Masking Service...');
+
+    // Verify encryption setup (REQUIRED for email privacy)
+    if (!process.env.MASTER_ENCRYPTION_KEY) {
+      logger.error('MASTER_ENCRYPTION_KEY is not set! Email encryption is required for privacy.');
+      logger.error('Generate a key with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+      process.exit(1);
+    }
+
+    if (!verifyEncryptionSetup()) {
+      logger.error('Encryption setup verification failed! Check your MASTER_ENCRYPTION_KEY.');
+      process.exit(1);
+    }
+    logger.info('Email encryption verified');
 
     // Connect to Redis (optional but recommended)
     const redisConnected = await connectRedis();

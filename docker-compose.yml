@@ -1,8 +1,8 @@
-version: '3.8'
-
 services:
   # Main application
   app:
+    env_file:
+      - .env.docker
     build:
       context: .
       dockerfile: Dockerfile
@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"   # HTTP API
-      - "25:25"       # SMTP (requires root or CAP_NET_BIND_SERVICE)
+      - "25:25"       # SMTP inbound (requires CAP_NET_BIND_SERVICE)
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -19,17 +19,21 @@ services:
       - REDIS_URL=redis://redis:6379
       - BASE_URL=${BASE_URL:-https://makeanon.info}
       - JWT_SECRET=${JWT_SECRET}
+      - MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY}
       - EMAIL_DOMAINS=${EMAIL_DOMAINS:-makeanon.info,makeanon.xyz,iamanon.lol}
+      # Inbound SMTP settings
       - SMTP_PORT=25
       - SMTP_HOST=0.0.0.0
       - SMTP_ENABLED=true
-      - SMTP_OUTBOUND_HOST=${SMTP_OUTBOUND_HOST}
-      - SMTP_OUTBOUND_PORT=${SMTP_OUTBOUND_PORT:-587}
-      - SMTP_OUTBOUND_SECURE=${SMTP_OUTBOUND_SECURE:-false}
-      - SMTP_OUTBOUND_USER=${SMTP_OUTBOUND_USER}
-      - SMTP_OUTBOUND_PASS=${SMTP_OUTBOUND_PASS}
+      # Outbound SMTP via Haraka container (DKIM signing)
+      - SMTP_OUTBOUND_HOST=haraka
+      - SMTP_OUTBOUND_PORT=2525
+      - SMTP_OUTBOUND_SECURE=false
+      - SMTP_OUTBOUND_USER=
+      - SMTP_OUTBOUND_PASS=
       - SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS:-noreply@makeanon.info}
       - SMTP_FROM_NAME=${SMTP_FROM_NAME:-MakeAnon}
+      # Rate limiting
       - MAX_ALIASES_PER_EMAIL=${MAX_ALIASES_PER_EMAIL:-10}
       - ALIAS_CREATION_LIMIT_PER_HOUR=${ALIAS_CREATION_LIMIT_PER_HOUR:-10}
       - FORWARD_LIMIT_PER_MINUTE=${FORWARD_LIMIT_PER_MINUTE:-30}
@@ -39,20 +43,26 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      haraka:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     cap_add:
       - NET_BIND_SERVICE
     networks:
       - makeanon-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/v1/health"]
-      interval: 30s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/v1/health"]
+      interval: 10s
       timeout: 10s
-      retries: 3
-      start_period: 10s
+      retries: 5
+      start_period: 60s
 
   # PostgreSQL database
   postgres:
-    image: postgres:16-alpine
+    env_file:
+      - .env.docker
+    image: postgres:17-alpine
     container_name: makeanon-postgres
     restart: unless-stopped
     environment:
@@ -87,7 +97,27 @@ services:
       retries: 5
       start_period: 5s
 
-  # Caddy reverse proxy (optional - for HTTPS)
+  # Haraka outbound SMTP relay with DKIM signing
+  haraka:
+    build:
+      context: ./haraka
+      dockerfile: Dockerfile
+    container_name: makeanon-haraka
+    environment:
+      - PUBLIC_IP=${PUBLIC_IP}
+    restart: unless-stopped
+    volumes:
+      - haraka_queue:/opt/haraka/queue
+    networks:
+      - makeanon-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2525"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Caddy reverse proxy with automatic HTTPS
   caddy:
     image: caddy:2-alpine
     container_name: makeanon-caddy
@@ -97,7 +127,7 @@ services:
       - "443:443"
     environment:
       - DOMAIN=${DOMAIN:-makeanon.info}
-      - ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@makeanon.info}
     volumes:
       - ./Caddyfile.docker:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -105,9 +135,8 @@ services:
     networks:
       - makeanon-network
     depends_on:
-      - app
-    profiles:
-      - with-caddy
+      app:
+        condition: service_healthy
 
 volumes:
   postgres_data:
@@ -117,6 +146,8 @@ volumes:
   caddy_data:
     driver: local
   caddy_config:
+    driver: local
+  haraka_queue:
     driver: local
 
 networks:

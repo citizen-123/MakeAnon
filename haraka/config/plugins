@@ -1,0 +1,16 @@
+# Haraka Plugins for Outbound Email Relay
+
+# CONNECT
+relay
+
+# MAIL FROM
+mail_from.is_resolvable
+
+# DATA - DKIM signing
+dkim
+
+# Headers
+headers
+
+# QUEUE - Direct delivery to MX servers
+queue/deliver

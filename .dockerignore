@@ -48,4 +48,6 @@ logs
 # Misc
 .eslintrc*
 .prettierrc*
-tsconfig.json
+
+# Haraka build context (separate)
+haraka
