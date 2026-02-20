@@ -6,7 +6,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // Available email domains for aliases
@@ -34,7 +33,12 @@ model Domain {
 // Optional user accounts (for private alias management)
 model User {
   id            String   @id @default(uuid())
-  email         String   @unique
+  email         String   // Encrypted ciphertext (or plaintext for legacy)
+  emailHash     String?  @unique // HMAC-SHA256 for lookups
+  emailIv       String?
+  emailSalt     String?
+  emailAuthTag  String?
+  isEmailEncrypted Boolean @default(false)
   password      String?  // Optional - only required for private aliases
   name          String?
   isActive      Boolean  @default(true)
@@ -50,6 +54,7 @@ model User {
   aliases       Alias[]
   emailLogs     EmailLog[]
 
+  @@index([emailHash])
   @@map("users")
 }
 

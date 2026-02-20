@@ -1,4 +1,5 @@
 import Redis from 'ioredis';
+import crypto from 'crypto';
 import logger from '../utils/logger';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
@@ -153,7 +154,8 @@ export async function checkRateLimit(
     return { allowed: true, remaining: limit - 1, resetAt };
   }
 
-  const rateLimitKey = key(`ratelimit:${identifier}`);
+  const hashedId = crypto.createHash('sha256').update(identifier).digest('hex').substring(0, 16);
+  const rateLimitKey = key(`ratelimit:${hashedId}`);
 
   try {
     const multi = redis.multi();

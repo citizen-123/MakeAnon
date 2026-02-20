@@ -67,6 +67,11 @@ async function main() {
     if (smtpEnabled) {
       try {
         startSmtpServer();
+
+        // Warn if TLS is not enabled in production
+        if (process.env.NODE_ENV === 'production' && process.env.SMTP_TLS_ENABLED !== 'true') {
+          logger.warn('SMTP TLS is not enabled. Inbound emails are not encrypted in transit. Set SMTP_TLS_ENABLED=true and configure TLS certificates.');
+        }
       } catch (error) {
         logger.error('Failed to start SMTP server:', error);
         logger.warn('SMTP server disabled. You can still use the API, but email receiving won\'t work.');

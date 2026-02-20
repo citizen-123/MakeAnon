@@ -31,7 +31,7 @@ export function generateManagementToken(): string {
  * Generate a reply prefix for alias replies
  */
 export function generateReplyPrefix(): string {
-  const prefix = customAlphabet(alphabet, 12);
+  const prefix = customAlphabet(alphabet, 20);
   return `r${prefix()}`;
 }
 
@@ -93,7 +93,7 @@ export function parseAliasEmail(email: string): { alias: string; domain: string 
 export function isReplyAddress(email: string): boolean {
   const parsed = parseAliasEmail(email);
   if (!parsed) return false;
-  return parsed.alias.startsWith('r') && parsed.alias.length === 13;
+  return parsed.alias.startsWith('r') && parsed.alias.length === 21;
 }
 
 /**

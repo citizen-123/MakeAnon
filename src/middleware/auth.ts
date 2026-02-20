@@ -2,6 +2,7 @@ import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { AuthenticatedRequest, JwtPayload } from '../types';
 import prisma from '../services/database';
+import { decryptEmail, EncryptedData } from '../utils/encryption';
 import logger from '../utils/logger';
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -36,7 +37,16 @@ export async function authenticate(
       // Verify user still exists and is active
       const user = await prisma.user.findUnique({
         where: { id: decoded.id },
-        select: { id: true, email: true, isActive: true, isAdmin: true },
+        select: {
+          id: true,
+          email: true,
+          emailIv: true,
+          emailSalt: true,
+          emailAuthTag: true,
+          isEmailEncrypted: true,
+          isActive: true,
+          isAdmin: true,
+        },
       });
 
       if (!user || !user.isActive) {
@@ -47,9 +57,20 @@ export async function authenticate(
         return;
       }
 
+      let email = user.email;
+      if (user.isEmailEncrypted && user.emailIv && user.emailSalt && user.emailAuthTag) {
+        const encryptedData: EncryptedData = {
+          ciphertext: user.email,
+          iv: user.emailIv,
+          salt: user.emailSalt,
+          authTag: user.emailAuthTag,
+        };
+        email = decryptEmail(encryptedData, user.id);
+      }
+
       req.user = {
         id: user.id,
-        email: user.email,
+        email,
         isAdmin: user.isAdmin,
       };
 

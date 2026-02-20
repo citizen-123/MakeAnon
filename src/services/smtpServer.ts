@@ -23,6 +23,7 @@ function maskEmail(email: string): string {
   return `${local[0]}${'*'.repeat(Math.min(local.length - 2, 5))}${local[local.length - 1]}${domain}`;
 }
 const FORWARD_LIMIT_PER_MINUTE = parseInt(process.env.FORWARD_LIMIT_PER_MINUTE || '30');
+const MIN_PROCESSING_MS = parseInt(process.env.MIN_PROCESSING_MS || '100');
 
 // Log level configuration: NONE, PRIVATE, PUBLIC, ALL
 type LogLevel = 'NONE' | 'PRIVATE' | 'PUBLIC' | 'ALL';
@@ -313,6 +314,12 @@ async function processEmail(
   } catch (error) {
     logger.error('Error processing email:', error);
     throw error;
+  } finally {
+    // Enforce minimum processing time to prevent timing-based alias enumeration
+    const elapsed = Date.now() - startTime;
+    if (elapsed < MIN_PROCESSING_MS) {
+      await new Promise(resolve => setTimeout(resolve, MIN_PROCESSING_MS - elapsed));
+    }
   }
 }
 

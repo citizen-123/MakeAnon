@@ -305,12 +305,13 @@ describe('Caching Strategies', () => {
       expect(key).toBe('alias:myalias@example.com');
     });
 
-    it('should generate consistent cache keys for rate limits', () => {
-      const identifier = 'user@example.com';
-      const action = 'alias_creation';
-      const key = `ratelimit:${action}:${identifier}`;
+    it('should not contain plaintext emails in rate limit keys', () => {
+      const identifier = 'alias_creation:user@example.com';
+      const hashedId = require('crypto').createHash('sha256').update(identifier).digest('hex').substring(0, 16);
+      const key = `ratelimit:${hashedId}`;
 
-      expect(key).toBe('ratelimit:alias_creation:user@example.com');
+      expect(key).not.toContain('user@example.com');
+      expect(key).toMatch(/^ratelimit:[a-f0-9]{16}$/);
     });
 
     it('should generate consistent cache keys for tokens', () => {

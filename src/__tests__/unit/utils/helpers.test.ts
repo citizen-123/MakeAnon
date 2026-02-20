@@ -121,9 +121,9 @@ describe('Helper Utilities', () => {
   });
 
   describe('generateReplyPrefix', () => {
-    it('should generate a 13-character string starting with r', () => {
+    it('should generate a 21-character string starting with r', () => {
       const prefix = generateReplyPrefix();
-      expect(prefix).toHaveLength(13);
+      expect(prefix).toHaveLength(21);
       expect(prefix.startsWith('r')).toBe(true);
     });
 
@@ -259,8 +259,8 @@ describe('Helper Utilities', () => {
 
   describe('isReplyAddress', () => {
     it('should return true for valid reply addresses', () => {
-      // Reply prefix is 'r' + 12 chars = 13 total
-      expect(isReplyAddress('rabcdefghijkl@test.example.com')).toBe(true);
+      // Reply prefix is 'r' + 20 chars = 21 total
+      expect(isReplyAddress('rabcdefghijklmnopqrst@test.example.com')).toBe(true);
     });
 
     it('should return false for non-reply addresses', () => {
@@ -270,11 +270,12 @@ describe('Helper Utilities', () => {
 
     it('should return false for wrong length reply-like addresses', () => {
       expect(isReplyAddress('r12345@test.example.com')).toBe(false); // Too short
-      expect(isReplyAddress('r12345678901234@test.example.com')).toBe(false); // Too long
+      expect(isReplyAddress('rabcdefghijkl@test.example.com')).toBe(false); // Old 13-char length
+      expect(isReplyAddress('rabcdefghijklmnopqrstuv@test.example.com')).toBe(false); // Too long
     });
 
     it('should return false for invalid domains', () => {
-      expect(isReplyAddress('rabcdefghijkl@invalid.com')).toBe(false);
+      expect(isReplyAddress('rabcdefghijklmnopqrst@invalid.com')).toBe(false);
     });
   });
 

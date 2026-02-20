@@ -1,12 +1,52 @@
 import { Request, Response } from 'express';
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import prisma from '../services/database';
 import { generateToken } from '../middleware/auth';
 import { AuthenticatedRequest } from '../types';
 import { isValidEmail } from '../utils/helpers';
+import { encryptEmail, decryptEmail, hashEmail, EncryptedData } from '../utils/encryption';
 import logger from '../utils/logger';
 
 const SALT_ROUNDS = 12;
+
+/**
+ * Encrypt a user's email for database storage
+ */
+function encryptUserEmail(email: string, userId: string) {
+  const encrypted = encryptEmail(email, userId);
+  return {
+    email: encrypted.ciphertext,
+    emailHash: hashEmail(email),
+    emailIv: encrypted.iv,
+    emailSalt: encrypted.salt,
+    emailAuthTag: encrypted.authTag,
+    isEmailEncrypted: true,
+  };
+}
+
+/**
+ * Decrypt a user's email from database
+ */
+function decryptUserEmail(user: {
+  id: string;
+  email: string;
+  emailIv?: string | null;
+  emailSalt?: string | null;
+  emailAuthTag?: string | null;
+  isEmailEncrypted?: boolean;
+}): string {
+  if (user.isEmailEncrypted && user.emailIv && user.emailSalt && user.emailAuthTag) {
+    const encryptedData: EncryptedData = {
+      ciphertext: user.email,
+      iv: user.emailIv,
+      salt: user.emailSalt,
+      authTag: user.emailAuthTag,
+    };
+    return decryptEmail(encryptedData, user.id);
+  }
+  return user.email;
+}
 
 /**
  * Sign up for an account
@@ -25,23 +65,30 @@ export async function signup(req: Request, res: Response): Promise<void> {
     }
 
     // Check if user already exists
+    const emailHashValue = hashEmail(email);
     const existingUser = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { emailHash: emailHashValue },
     });
 
     if (existingUser) {
       // If user exists but has no password and one is being set
       if (!existingUser.password && password) {
         const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+        const encryptedFields = encryptUserEmail(email.toLowerCase(), existingUser.id);
         const user = await prisma.user.update({
           where: { id: existingUser.id },
           data: {
             password: hashedPassword,
             name: name || existingUser.name,
+            ...encryptedFields,
           },
           select: {
             id: true,
             email: true,
+            emailIv: true,
+            emailSalt: true,
+            emailAuthTag: true,
+            isEmailEncrypted: true,
             name: true,
             isAdmin: true,
             maxAliases: true,
@@ -49,15 +96,26 @@ export async function signup(req: Request, res: Response): Promise<void> {
           },
         });
 
+        const plaintextEmail = decryptUserEmail(user);
         const token = generateToken({
           id: user.id,
-          email: user.email,
+          email: plaintextEmail,
           isAdmin: user.isAdmin,
         });
 
         res.json({
           success: true,
-          data: { user, token },
+          data: {
+            user: {
+              id: user.id,
+              email: plaintextEmail,
+              name: user.name,
+              isAdmin: user.isAdmin,
+              maxAliases: user.maxAliases,
+              createdAt: user.createdAt,
+            },
+            token,
+          },
           message: 'Password set successfully. You can now manage private aliases.',
         });
         return;
@@ -77,10 +135,14 @@ export async function signup(req: Request, res: Response): Promise<void> {
     const isFirstUser = (await prisma.user.count()) === 0;
     const isConfiguredAdmin = email.toLowerCase() === process.env.ADMIN_EMAIL?.toLowerCase();
 
+    const tempId = crypto.randomUUID();
+    const encryptedFields = encryptUserEmail(email.toLowerCase(), tempId);
+
     // Create user
     const user = await prisma.user.create({
       data: {
-        email: email.toLowerCase(),
+        id: tempId,
+        ...encryptedFields,
         password: hashedPassword,
         name: name || null,
         isAdmin: isFirstUser || isConfiguredAdmin,
@@ -88,6 +150,10 @@ export async function signup(req: Request, res: Response): Promise<void> {
       select: {
         id: true,
         email: true,
+        emailIv: true,
+        emailSalt: true,
+        emailAuthTag: true,
+        isEmailEncrypted: true,
         name: true,
         isAdmin: true,
         maxAliases: true,
@@ -95,18 +161,30 @@ export async function signup(req: Request, res: Response): Promise<void> {
       },
     });
 
+    const plaintextEmail = decryptUserEmail(user);
+
     // Generate token
     const token = generateToken({
       id: user.id,
-      email: user.email,
+      email: plaintextEmail,
       isAdmin: user.isAdmin,
     });
 
-    logger.info(`New user registered: ${user.email}${user.isAdmin ? ' (admin)' : ''}`);
+    logger.info(`New user registered: [encrypted]${user.isAdmin ? ' (admin)' : ''}`);
 
     res.status(201).json({
       success: true,
-      data: { user, token },
+      data: {
+        user: {
+          id: user.id,
+          email: plaintextEmail,
+          name: user.name,
+          isAdmin: user.isAdmin,
+          maxAliases: user.maxAliases,
+          createdAt: user.createdAt,
+        },
+        token,
+      },
       message: password
         ? 'Account created successfully'
         : 'Account created. Set a password to manage private aliases.',
@@ -137,7 +215,7 @@ export async function login(req: Request, res: Response): Promise<void> {
 
     // Find user
     const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { emailHash: hashEmail(email) },
     });
 
     if (!user) {
@@ -176,21 +254,23 @@ export async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    const plaintextEmail = decryptUserEmail(user);
+
     // Generate token
     const token = generateToken({
       id: user.id,
-      email: user.email,
+      email: plaintextEmail,
       isAdmin: user.isAdmin,
     });
 
-    logger.info(`User logged in: ${user.email}`);
+    logger.info(`User logged in: [encrypted]`);
 
     res.json({
       success: true,
       data: {
         user: {
           id: user.id,
-          email: user.email,
+          email: plaintextEmail,
           name: user.name,
           isAdmin: user.isAdmin,
           maxAliases: user.maxAliases,
@@ -220,6 +300,10 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
       select: {
         id: true,
         email: true,
+        emailIv: true,
+        emailSalt: true,
+        emailAuthTag: true,
+        isEmailEncrypted: true,
         name: true,
         isAdmin: true,
         emailVerified: true,
@@ -239,11 +323,13 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
+    const plaintextEmail = decryptUserEmail(user);
+
     res.json({
       success: true,
       data: {
         id: user.id,
-        email: user.email,
+        email: plaintextEmail,
         name: user.name,
         isAdmin: user.isAdmin,
         emailVerified: user.emailVerified,
@@ -353,7 +439,7 @@ export async function changePassword(req: AuthenticatedRequest, res: Response): 
       data: { password: hashedPassword },
     });
 
-    logger.info(`Password ${user.password ? 'changed' : 'set'} for user: ${user.email}`);
+    logger.info(`Password ${user.password ? 'changed' : 'set'} for user: [encrypted]`);
 
     res.json({
       success: true,
@@ -408,8 +494,8 @@ export async function deleteAccount(req: AuthenticatedRequest, res: Response): P
         return;
       }
     } else {
-      // For passwordless accounts, require email confirmation
-      if (confirmEmail?.toLowerCase() !== user.email) {
+      const plaintextEmail = decryptUserEmail(user);
+      if (confirmEmail?.toLowerCase() !== plaintextEmail) {
         res.status(400).json({
           success: false,
           error: 'Please confirm by entering your email address',
@@ -423,7 +509,7 @@ export async function deleteAccount(req: AuthenticatedRequest, res: Response): P
       where: { id: userId },
     });
 
-    logger.info(`Account deleted: ${user.email}`);
+    logger.info(`Account deleted: [encrypted]`);
 
     res.json({
       success: true,
