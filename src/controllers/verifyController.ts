@@ -103,9 +103,10 @@ export async function resendVerification(req: Request, res: Response): Promise<v
     });
 
     if (!alias) {
-      res.status(404).json({
-        success: false,
-        error: 'No unverified alias found',
+      // Don't reveal whether alias exists
+      res.json({
+        success: true,
+        message: 'If a matching unverified alias exists, a verification email has been sent.',
       });
       return;
     }
@@ -128,7 +129,7 @@ export async function resendVerification(req: Request, res: Response): Promise<v
 
     res.json({
       success: true,
-      message: 'Verification email sent. Please check your inbox.',
+      message: 'If a matching unverified alias exists, a verification email has been sent.',
     });
   } catch (error) {
     logger.error('Resend verification error:', error);
