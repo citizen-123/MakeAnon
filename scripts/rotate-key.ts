@@ -16,8 +16,12 @@
 
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 
-const prisma = new PrismaClient();
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const adapter = new PrismaPg(pool, { schema: 'public' });
+const prisma = new PrismaClient({ adapter });
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;

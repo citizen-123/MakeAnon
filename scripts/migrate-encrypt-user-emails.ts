@@ -8,9 +8,13 @@
  */
 
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 import { encryptEmail, hashEmail, verifyEncryptionSetup } from '../src/utils/encryption';
 
-const prisma = new PrismaClient();
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const adapter = new PrismaPg(pool, { schema: 'public' });
+const prisma = new PrismaClient({ adapter });
 
 async function migrateUserEmails() {
   console.log('Starting user email encryption migration...\n');
