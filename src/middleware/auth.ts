@@ -5,10 +5,10 @@ import prisma from '../services/database';
 import { decryptEmail, EncryptedData } from '../utils/encryption';
 import logger from '../utils/logger';
 
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
+if (!process.env.JWT_SECRET) {
   throw new Error('JWT_SECRET environment variable is required');
 }
+const JWT_SECRET: string = process.env.JWT_SECRET;
 
 /**
  * Authenticate requests using JWT token
@@ -32,7 +32,7 @@ export async function authenticate(
     const token = authHeader.substring(7);
 
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+      const decoded = jwt.verify(token, JWT_SECRET) as unknown as JwtPayload;
 
       // Verify user still exists and is active
       const user = await prisma.user.findUnique({
@@ -112,7 +112,7 @@ export function generateToken(payload: { id: string; email: string; isAdmin: boo
  */
 export function verifyToken(token: string): JwtPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as JwtPayload;
+    return jwt.verify(token, JWT_SECRET) as unknown as JwtPayload;
   } catch {
     return null;
   }
