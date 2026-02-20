@@ -13,7 +13,7 @@ echo "Database is ready!"
 
 # Sync database schema
 echo "Syncing database schema..."
-if ! npx prisma db push; then
+if ! npx prisma db push --url "$DATABASE_URL"; then
   echo "ERROR: Database schema sync failed!"
   echo "If this is a fresh install, ensure DATABASE_URL is correct."
   exit 1
