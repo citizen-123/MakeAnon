@@ -213,7 +213,7 @@ async function processEmail(
     const mailFrom = session.envelope.mailFrom;
     const fromAddress = (mailFrom && typeof mailFrom !== 'boolean' ? mailFrom.address : null) || parseEmailAddress(parsed.from?.text || '').email;
 
-    logger.info(`Received email from ${fromAddress} to ${recipients.join(', ')}`);
+    logger.info(`Received email from ${maskEmail(fromAddress)} to ${recipients.join(', ')}`);
 
     for (const recipientAddress of recipients) {
       // Parse the recipient address
@@ -250,7 +250,7 @@ async function processEmail(
 
       // Check if sender is blocked
       if (isSenderBlocked(fromAddress, alias.blockedSenders)) {
-        logger.info(`Sender blocked for ${alias.fullAddress}: ${fromAddress}`);
+        logger.info(`Sender blocked for ${alias.fullAddress}: ${maskEmail(fromAddress)}`);
         await logEmail(alias.id, alias.userId, fromAddress, recipientAddress, parsed.subject || null, 'blocked', alias.isPrivate, 'Sender is blocked', Date.now() - startTime);
 
         // Update blocked count
@@ -444,17 +444,17 @@ export function startSmtpServer(): SMTPServer {
 
     // Log connections
     onConnect(session, callback) {
-      logger.debug(`SMTP connection from ${session.remoteAddress}`);
+      logger.debug('SMTP connection opened');
       callback();
     },
 
     // Log disconnections
     onClose(session) {
-      logger.debug(`SMTP connection closed from ${session.remoteAddress}`);
+      logger.debug('SMTP connection closed');
     },
 
     // Banner
-    banner: 'MakeAnon Email Masking Service',
+    banner: 'ESMTP',
   });
 
   smtpServer.listen(port, host, () => {
