@@ -413,7 +413,7 @@ sed '/^-/d' haraka/config/dkim/yourdomain.com/public | tr -d '\n'
 | `HOST` | `0.0.0.0` | Bind address |
 | `NODE_ENV` | `development` | `development` or `production` |
 | `BASE_URL` | `http://localhost:3000` | Public URL for links in emails |
-| `CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
+| `CORS_ORIGIN` | `https://makeanon.yourdomain.com` | Allowed CORS origin (should match BASE_URL; never use `*` in production) |
 
 ### SMTP Inbound (Receiving)
 

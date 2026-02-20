@@ -581,7 +581,14 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
     // Get user with their limits
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { email: true, maxAliases: true },
+      select: {
+        email: true,
+        emailIv: true,
+        emailSalt: true,
+        emailAuthTag: true,
+        isEmailEncrypted: true,
+        maxAliases: true,
+      },
     });
 
     if (!user) {
@@ -592,8 +599,18 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
       return;
     }
 
-    // Use user's email if no destination provided
-    const email = (destinationEmail || user.email).toLowerCase();
+    // Use user's email if no destination provided (decrypt if encrypted)
+    let fallbackEmail = user.email;
+    if (!destinationEmail && user.isEmailEncrypted && user.emailIv && user.emailSalt && user.emailAuthTag) {
+      const encryptedData: EncryptedData = {
+        ciphertext: user.email,
+        iv: user.emailIv,
+        salt: user.emailSalt,
+        authTag: user.emailAuthTag,
+      };
+      fallbackEmail = decryptEmail(encryptedData, userId);
+    }
+    const email = (destinationEmail || fallbackEmail).toLowerCase();
 
     // Check alias limit
     const aliasCount = await prisma.alias.count({

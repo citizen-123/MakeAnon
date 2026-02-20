@@ -154,7 +154,7 @@ export async function checkRateLimit(
     return { allowed: true, remaining: limit - 1, resetAt };
   }
 
-  const hashedId = crypto.createHash('sha256').update(identifier).digest('hex').substring(0, 16);
+  const hashedId = crypto.createHash('sha256').update(identifier).digest('hex').substring(0, 32);
   const rateLimitKey = key(`ratelimit:${hashedId}`);
 
   try {

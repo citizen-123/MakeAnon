@@ -307,11 +307,11 @@ describe('Caching Strategies', () => {
 
     it('should not contain plaintext emails in rate limit keys', () => {
       const identifier = 'alias_creation:user@example.com';
-      const hashedId = require('crypto').createHash('sha256').update(identifier).digest('hex').substring(0, 16);
+      const hashedId = require('crypto').createHash('sha256').update(identifier).digest('hex').substring(0, 32);
       const key = `ratelimit:${hashedId}`;
 
       expect(key).not.toContain('user@example.com');
-      expect(key).toMatch(/^ratelimit:[a-f0-9]{16}$/);
+      expect(key).toMatch(/^ratelimit:[a-f0-9]{32}$/);
     });
 
     it('should generate consistent cache keys for tokens', () => {

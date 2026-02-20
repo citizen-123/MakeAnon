@@ -361,15 +361,27 @@ export async function updateProfile(req: AuthenticatedRequest, res: Response): P
       select: {
         id: true,
         email: true,
+        emailIv: true,
+        emailSalt: true,
+        emailAuthTag: true,
+        isEmailEncrypted: true,
         name: true,
         isAdmin: true,
         createdAt: true,
       },
     });
 
+    const decryptedEmail = decryptUserEmail(user);
+
     res.json({
       success: true,
-      data: user,
+      data: {
+        id: user.id,
+        email: decryptedEmail,
+        name: user.name,
+        isAdmin: user.isAdmin,
+        createdAt: user.createdAt,
+      },
       message: 'Profile updated successfully',
     });
   } catch (error) {
