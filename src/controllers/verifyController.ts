@@ -98,7 +98,7 @@ export async function resendVerification(req: Request, res: Response): Promise<v
     const alias = await prisma.alias.findFirst({
       where: {
         ...(aliasId && { id: aliasId }),
-        ...(email && { destinationEmail: email.toLowerCase() }),
+        ...(email && { destinationHash: hashEmail(email) }),
         emailVerified: false,
       },
     });
