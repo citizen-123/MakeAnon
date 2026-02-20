@@ -40,6 +40,9 @@ haraka/config/dkim/*/private
 # Haraka internal command key
 haraka/config/internalcmd_key
 
+# Claude Code
+.claude/
+
 # Temporary files
 tmp/
 temp/
