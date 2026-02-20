@@ -1,5 +1,6 @@
-import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
+import { Router, Request, Response, NextFunction } from 'express';
+import rateLimit, { RateLimitRequestHandler } from 'express-rate-limit';
+import RedisStore from 'rate-limit-redis';
 import {
   createPublicAlias,
   getAliasByToken,
@@ -14,19 +15,47 @@ import {
   resendManagementLink,
 } from '../controllers/verifyController';
 import { listDomains } from '../controllers/domainController';
+import { getRedisClient } from '../services/redis';
 
 const router = Router();
 
-const managementLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: {
-    success: false,
-    error: 'Too many requests. Please try again later.',
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+let _managementLimiter: RateLimitRequestHandler | null = null;
+
+function createRedisStore(): RedisStore | undefined {
+  try {
+    const client = getRedisClient();
+    if (!client || typeof client.call !== 'function') return undefined;
+    return new RedisStore({
+      sendCommand: (...args: string[]) =>
+        client.call(args[0], ...args.slice(1)) as Promise<string>,
+      prefix: 'rl:mgmt:',
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function getManagementLimiter(): RateLimitRequestHandler {
+  if (!_managementLimiter) {
+    const store = createRedisStore();
+    _managementLimiter = rateLimit({
+      windowMs: 15 * 60 * 1000,
+      max: 20,
+      message: {
+        success: false,
+        error: 'Too many requests. Please try again later.',
+      },
+      standardHeaders: true,
+      legacyHeaders: false,
+      ...(store ? { store } : {}),
+    });
+  }
+  return _managementLimiter;
+}
+
+function managementLimiter(req: Request, res: Response, next: NextFunction) {
+  getManagementLimiter()(req, res, next);
+}
 
 // ============================================================================
 // Public Alias Creation

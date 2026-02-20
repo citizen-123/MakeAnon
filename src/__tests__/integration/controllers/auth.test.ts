@@ -155,7 +155,7 @@ describe('Auth Controller', () => {
         });
 
         const existingUser = await prisma.user.findUnique({
-          where: { email }
+          where: { emailHash: email }
         });
 
         expect(existingUser).not.toBeNull();
@@ -187,7 +187,7 @@ describe('Auth Controller', () => {
         mockResolve(prisma.user.findUnique,null);
 
         const user = await prisma.user.findUnique({
-          where: { email: 'nonexistent@example.com' }
+          where: { emailHash: 'nonexistent@example.com' }
         });
 
         expect(user).toBeNull();
@@ -246,7 +246,7 @@ describe('Auth Controller', () => {
         });
 
         const user = await prisma.user.findUnique({
-          where: { email: 'inactive@example.com' }
+          where: { emailHash: 'inactive@example.com' }
         });
 
         expect(user?.isActive).toBe(false);

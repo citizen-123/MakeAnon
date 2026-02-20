@@ -113,7 +113,7 @@ async function rotateKeys() {
   }
   console.log('Old key verified.\n');
 
-  // Rotate alias emails
+  // Rotate alias emails (all-or-nothing per phase)
   console.log('=== Rotating Alias Emails ===');
   const encryptedAliases = await prisma.alias.findMany({
     where: { isEncrypted: true },
@@ -130,16 +130,17 @@ async function rotateKeys() {
   console.log(`Found ${encryptedAliases.length} encrypted aliases.\n`);
 
   let aliasSuccess = 0;
-  let aliasError = 0;
+  let aliasSkipped = 0;
 
-  for (const alias of encryptedAliases) {
-    try {
+  await prisma.$transaction(async (tx) => {
+    for (const alias of encryptedAliases) {
       if (
         !alias.destinationIv ||
         !alias.destinationSalt ||
         !alias.destinationAuthTag
       ) {
         console.log(`Skipping ${alias.id}: missing encryption fields`);
+        aliasSkipped++;
         continue;
       }
 
@@ -157,7 +158,7 @@ async function rotateKeys() {
       const newEncrypted = encrypt(plaintext, alias.id, newKey);
       const newHash = hashWithKey(plaintext, newKey);
 
-      await prisma.alias.update({
+      await tx.alias.update({
         where: { id: alias.id },
         data: {
           destinationEmail: newEncrypted.ciphertext,
@@ -169,15 +170,12 @@ async function rotateKeys() {
       });
 
       aliasSuccess++;
-    } catch (error) {
-      aliasError++;
-      console.error(`Failed to rotate alias ${alias.id}:`, error);
     }
-  }
+  });
 
-  console.log(`Aliases: ${aliasSuccess} rotated, ${aliasError} failed\n`);
+  console.log(`Aliases: ${aliasSuccess} rotated, ${aliasSkipped} skipped\n`);
 
-  // Rotate user emails
+  // Rotate user emails (all-or-nothing per phase)
   console.log('=== Rotating User Emails ===');
   const encryptedUsers = await prisma.user.findMany({
     where: { isEmailEncrypted: true },
@@ -193,12 +191,13 @@ async function rotateKeys() {
   console.log(`Found ${encryptedUsers.length} encrypted users.\n`);
 
   let userSuccess = 0;
-  let userError = 0;
+  let userSkipped = 0;
 
-  for (const user of encryptedUsers) {
-    try {
+  await prisma.$transaction(async (tx) => {
+    for (const user of encryptedUsers) {
       if (!user.emailIv || !user.emailSalt || !user.emailAuthTag) {
         console.log(`Skipping user ${user.id}: missing encryption fields`);
+        userSkipped++;
         continue;
       }
 
@@ -213,7 +212,7 @@ async function rotateKeys() {
       const newEncrypted = encrypt(plaintext, user.id, newKey);
       const newHash = hashWithKey(plaintext, newKey);
 
-      await prisma.user.update({
+      await tx.user.update({
         where: { id: user.id },
         data: {
           email: newEncrypted.ciphertext,
@@ -225,28 +224,15 @@ async function rotateKeys() {
       });
 
       userSuccess++;
-    } catch (error) {
-      userError++;
-      console.error(`Failed to rotate user ${user.id}:`, error);
     }
-  }
+  });
 
-  console.log(`Users: ${userSuccess} rotated, ${userError} failed\n`);
+  console.log(`Users: ${userSuccess} rotated, ${userSkipped} skipped\n`);
 
   // Summary
   console.log('=== Rotation Summary ===');
   console.log(`Aliases: ${aliasSuccess}/${encryptedAliases.length} rotated`);
   console.log(`Users:   ${userSuccess}/${encryptedUsers.length} rotated`);
-
-  if (aliasError > 0 || userError > 0) {
-    console.error(
-      '\nWARNING: Some records failed to rotate. Check errors above.'
-    );
-    console.error(
-      'DO NOT update your .env yet — failed records still use the old key.'
-    );
-    process.exit(1);
-  }
 
   console.log('\nKey rotation completed successfully!');
   console.log(
