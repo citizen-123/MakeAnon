@@ -3,6 +3,7 @@ import prisma from '../services/database';
 import { verifyToken } from '../services/verificationService';
 import { sendManagementLinkEmail } from '../services/verificationService';
 import { createManagementUrl } from '../utils/helpers';
+import { hashEmail } from '../utils/encryption';
 import logger from '../utils/logger';
 
 /**
@@ -159,7 +160,7 @@ export async function resendManagementLink(req: Request, res: Response): Promise
     const alias = await prisma.alias.findFirst({
       where: {
         fullAddress: aliasAddress.toLowerCase(),
-        destinationEmail: destinationEmail.toLowerCase(),
+        destinationHash: hashEmail(destinationEmail),
         isPrivate: false, // Only for public aliases
       },
     });
