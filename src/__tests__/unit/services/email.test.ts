@@ -107,7 +107,7 @@ describe('Email Service', () => {
       );
     });
 
-    it('should include forwarding headers', async () => {
+    it('should not include identifying headers', async () => {
       const { forwardEmail } = await import('../../../services/emailService');
       await forwardEmail(
         originalMessage,
@@ -115,15 +115,8 @@ describe('Email Service', () => {
         'alias@makeanon.com'
       );
 
-      expect(mockSendMail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            'X-MakeAnon-Forwarded': 'true',
-            'X-MakeAnon-Original-From': 'sender@external.com',
-            'X-MakeAnon-Alias': 'alias@makeanon.com'
-          })
-        })
-      );
+      const callArgs = mockSendMail.mock.calls[0][0] as Record<string, unknown>;
+      expect(callArgs.headers).toBeUndefined();
     });
 
     it('should set reply-to address when reply prefix provided', async () => {
@@ -232,7 +225,7 @@ describe('Email Service', () => {
       );
     });
 
-    it('should include reply headers', async () => {
+    it('should not include identifying headers on reply', async () => {
       const { sendReplyEmail } = await import('../../../services/emailService');
       await sendReplyEmail(
         'original@sender.com',
@@ -240,13 +233,8 @@ describe('Email Service', () => {
         'Re: Test Subject'
       );
 
-      expect(mockSendMail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            'X-MakeAnon-Reply': 'true'
-          })
-        })
-      );
+      const callArgs = mockSendMail.mock.calls[0][0] as Record<string, unknown>;
+      expect(callArgs.headers).toBeUndefined();
     });
 
     it('should handle send failure', async () => {
@@ -394,29 +382,6 @@ describe('HTML Escaping', () => {
     expect(escaped).not.toContain('>');
     expect(escaped).not.toContain('"');
     expect(escaped).toContain('&amp;');
-  });
-});
-
-describe('Email Headers', () => {
-  describe('Custom Headers', () => {
-    it('should include X-MakeAnon-Forwarded header', () => {
-      const headers = {
-        'X-MakeAnon-Forwarded': 'true',
-        'X-MakeAnon-Original-From': 'sender@example.com',
-        'X-MakeAnon-Alias': 'alias@makeanon.com'
-      };
-
-      expect(headers['X-MakeAnon-Forwarded']).toBe('true');
-    });
-
-    it('should preserve original message ID', () => {
-      const originalMessageId = '<abc123@example.com>';
-      const headers = {
-        'X-MakeAnon-Original-Message-Id': originalMessageId
-      };
-
-      expect(headers['X-MakeAnon-Original-Message-Id']).toBe(originalMessageId);
-    });
   });
 });
 

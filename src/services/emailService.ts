@@ -114,13 +114,6 @@ Subject: ${originalMessage.subject || '(no subject)'}
         ? headerHtml + originalMessage.html
         : undefined,
       replyTo: replyToAddress,
-      headers: {
-        'X-MakeAnon-Forwarded': 'true',
-        'X-MakeAnon-Original-From': originalMessage.from,
-        'X-MakeAnon-Alias': aliasAddress,
-        ...(originalMessage.messageId && { 'X-MakeAnon-Original-Message-Id': originalMessage.messageId }),
-        ...(replyPrefix && { 'X-MakeAnon-Reply-Prefix': replyPrefix }),
-      },
     };
 
     const result = await transport.sendMail(mailOptions);
@@ -165,10 +158,6 @@ export async function sendReplyEmail(
       subject,
       text,
       html,
-      headers: {
-        'X-MakeAnon-Reply': 'true',
-        'X-MakeAnon-Alias': aliasAddress,
-      },
     };
 
     const result = await transport.sendMail(mailOptions);
