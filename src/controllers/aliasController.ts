@@ -202,7 +202,7 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
         isPrivate: false,
         managementToken,
         replyPrefix,
-        replyEnabled: true,
+        replyEnabled: false,
         expiresAt: expiresIn ? calculateExpiresAt(expiresIn) : null,
       },
       include: {
@@ -380,7 +380,7 @@ export async function updateAliasByToken(req: Request, res: Response): Promise<v
       },
     });
 
-    await invalidateAliasCache(alias.alias);
+    await invalidateAliasCache(alias.fullAddress);
 
     logger.info(`Alias updated via token: ${updated.fullAddress}`);
 
@@ -425,7 +425,7 @@ export async function deleteAliasByToken(req: Request, res: Response): Promise<v
       data: { aliasCount: { decrement: 1 } },
     });
 
-    await invalidateAliasCache(alias.alias);
+    await invalidateAliasCache(alias.fullAddress);
 
     logger.info(`Alias deleted via token: ${alias.fullAddress}`);
 
@@ -445,12 +445,37 @@ export async function deleteAliasByToken(req: Request, res: Response): Promise<v
 /**
  * Block a sender for an alias
  */
+/**
+ * Validate a glob-style email pattern (e.g., *@spam.com, spammer@*)
+ */
+function isValidEmailPattern(pattern: string): boolean {
+  if (!pattern.includes('@')) return false;
+  if (!pattern.includes('*') && !pattern.includes('?')) return false;
+  return /^[a-zA-Z0-9._%+\-*?@]+$/.test(pattern);
+}
+
 export async function blockSender(req: Request, res: Response): Promise<void> {
   try {
     const { token } = req.params;
-    const { email, reason } = req.body;
+    const { email, reason, isPattern } = req.body;
 
-    if (!email || !isValidEmail(email)) {
+    if (!email) {
+      res.status(400).json({
+        success: false,
+        error: 'Please provide an email address or pattern to block',
+      });
+      return;
+    }
+
+    if (isPattern) {
+      if (!isValidEmailPattern(email)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid pattern. Use * or ? wildcards with a valid email format (e.g., *@spam.com)',
+        });
+        return;
+      }
+    } else if (!isValidEmail(email)) {
       res.status(400).json({
         success: false,
         error: 'Please provide a valid email address to block',
@@ -480,9 +505,11 @@ export async function blockSender(req: Request, res: Response): Promise<void> {
       create: {
         aliasId: alias.id,
         email: email.toLowerCase(),
+        isPattern: !!isPattern,
         reason: reason || null,
       },
       update: {
+        isPattern: !!isPattern,
         reason: reason || null,
       },
     });
@@ -673,7 +700,7 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
         isPrivate: true,
         userId,
         replyPrefix,
-        replyEnabled: true,
+        replyEnabled: false,
         expiresAt: expiresIn ? calculateExpiresAt(expiresIn) : null,
       },
       include: {
@@ -841,7 +868,7 @@ export async function updateAlias(req: AuthenticatedRequest, res: Response): Pro
       },
     });
 
-    await invalidateAliasCache(existing.alias);
+    await invalidateAliasCache(existing.fullAddress);
 
     logger.info(`Alias updated: ${updated.fullAddress}`);
 
@@ -886,7 +913,7 @@ export async function deleteAlias(req: AuthenticatedRequest, res: Response): Pro
       data: { aliasCount: { decrement: 1 } },
     });
 
-    await invalidateAliasCache(existing.alias);
+    await invalidateAliasCache(existing.fullAddress);
 
     logger.info(`Alias deleted: ${existing.fullAddress}`);
 
@@ -931,7 +958,7 @@ export async function toggleAlias(req: AuthenticatedRequest, res: Response): Pro
       },
     });
 
-    await invalidateAliasCache(existing.alias);
+    await invalidateAliasCache(existing.fullAddress);
 
     res.json({
       success: true,

@@ -11,12 +11,11 @@ until nc -z ${DB_HOST:-postgres} ${DB_PORT:-5432}; do
 done
 echo "Database is ready!"
 
-# Run database migrations
-echo "Running database migrations..."
-if ! npx prisma migrate deploy; then
-  echo "ERROR: Database migration failed!"
+# Sync database schema
+echo "Syncing database schema..."
+if ! npx prisma db push --skip-generate; then
+  echo "ERROR: Database schema sync failed!"
   echo "If this is a fresh install, ensure DATABASE_URL is correct."
-  echo "If upgrading, check for pending migrations."
   exit 1
 fi
 

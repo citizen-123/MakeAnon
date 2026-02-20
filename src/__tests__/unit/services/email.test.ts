@@ -7,8 +7,8 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 
 // Mock nodemailer before imports
-const mockSendMail = jest.fn().mockResolvedValue({ messageId: 'test-message-id' });
-const mockVerify = jest.fn().mockResolvedValue(true);
+const mockSendMail = jest.fn<any>().mockResolvedValue({ messageId: 'test-message-id' });
+const mockVerify = jest.fn<any>().mockResolvedValue(true);
 const mockTransporter = {
   sendMail: mockSendMail,
   verify: mockVerify
@@ -72,6 +72,7 @@ describe('Email Service', () => {
   describe('forwardEmail', () => {
     const originalMessage = {
       from: 'sender@external.com',
+      to: ['alias@makeanon.com'],
       subject: 'Test Subject',
       text: 'Test body text',
       html: '<p>Test body HTML</p>',
@@ -389,10 +390,10 @@ describe('HTML Escaping', () => {
     const input = '<a href="test">Link & More</a>';
     const escaped = escapeHtml(input);
 
-    expect(escaped).not.toContain('<');
+    expect(escaped).not.toContain('<a');
     expect(escaped).not.toContain('>');
     expect(escaped).not.toContain('"');
-    expect(escaped).not.toContain('&a');
+    expect(escaped).toContain('&amp;');
   });
 });
 

@@ -84,7 +84,7 @@ jest.mock('ioredis', () => {
     }),
 
     on: jest.fn(),
-    quit: jest.fn().mockResolvedValue('OK'),
+    quit: jest.fn<any>().mockResolvedValue('OK'),
     disconnect: jest.fn(),
   }));
 

@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import prisma from '../services/database';
 import { authenticate } from '../middleware/auth';
 import { AuthenticatedRequest } from '../types';
+import { hashEmail } from '../utils/encryption';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -188,11 +189,15 @@ router.get('/aliases', async (req: AuthenticatedRequest, res: Response) => {
 
     const where: any = {};
     if (search) {
+      const searchStr = String(search);
       where.OR = [
-        { alias: { contains: String(search) } },
-        { fullAddress: { contains: String(search) } },
-        { destinationEmail: { contains: String(search) } },
+        { alias: { contains: searchStr } },
+        { fullAddress: { contains: searchStr } },
       ];
+      // destinationEmail is encrypted — use hash-based exact match for email searches
+      if (searchStr.includes('@')) {
+        where.OR.push({ destinationHash: hashEmail(searchStr) });
+      }
     }
     if (active !== undefined) {
       where.isActive = active === 'true';
@@ -268,9 +273,7 @@ router.get('/logs', async (req: AuthenticatedRequest, res: Response) => {
     if (status) where.status = status;
     if (search) {
       where.OR = [
-        { fromEmail: { contains: String(search) } },
         { toAlias: { contains: String(search) } },
-        { subject: { contains: String(search) } },
       ];
     }
 

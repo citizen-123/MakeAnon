@@ -113,7 +113,7 @@ model Alias {
   disabledAt      DateTime? // When alias was disabled (for 30-day deletion)
 
   // Reply support - allows replying through the alias
-  replyEnabled    Boolean  @default(true)
+  replyEnabled    Boolean  @default(false)
   replyPrefix     String?  @unique // Unique prefix for reply routing
 
   // Optional owner (for private aliases)

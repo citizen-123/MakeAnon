@@ -10,6 +10,18 @@ import logger from '../utils/logger';
 let smtpServer: SMTPServer | null = null;
 
 const MAX_EMAIL_SIZE = parseInt(process.env.MAX_EMAIL_SIZE_BYTES || '26214400'); // 25MB
+
+/**
+ * Mask an email address for privacy-safe storage (e.g., john.doe@gmail.com → j*******e@gmail.com)
+ */
+function maskEmail(email: string): string {
+  const atIndex = email.indexOf('@');
+  if (atIndex < 1) return '***';
+  const local = email.substring(0, atIndex);
+  const domain = email.substring(atIndex);
+  if (local.length <= 2) return `${local[0]}*${domain}`;
+  return `${local[0]}${'*'.repeat(Math.min(local.length - 2, 5))}${local[local.length - 1]}${domain}`;
+}
 const FORWARD_LIMIT_PER_MINUTE = parseInt(process.env.FORWARD_LIMIT_PER_MINUTE || '30');
 
 // Log level configuration: NONE, PRIVATE, PUBLIC, ALL
@@ -372,9 +384,9 @@ async function logEmail(
       data: {
         aliasId,
         userId,
-        fromEmail,
+        fromEmail: maskEmail(fromEmail),
         toAlias,
-        subject,
+        subject: null, // Subject not stored for privacy
         status,
         error,
         processingTime,

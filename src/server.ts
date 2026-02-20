@@ -32,6 +32,10 @@ async function main() {
     }
     logger.info('Email encryption verified');
 
+    // Connect to database
+    await prisma.$connect();
+    logger.info('Database connected successfully');
+
     // Connect to Redis (optional but recommended)
     const redisConnected = await connectRedis();
     if (!redisConnected) {
