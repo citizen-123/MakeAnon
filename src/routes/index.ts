@@ -40,7 +40,7 @@ router.get('/health', async (_req, res) => {
       redis: redisHealthy,
     },
     timestamp: new Date().toISOString(),
-    version: process.env.npm_package_version || '2.0.0',
+    version: process.env.npm_package_version || '2.1.1',
   });
 });
 

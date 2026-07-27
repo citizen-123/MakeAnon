@@ -35,7 +35,7 @@ export async function listDomains(req: Request, res: Response): Promise<void> {
  */
 export async function getDomain(req: Request, res: Response): Promise<void> {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const domain = await getDomainById(id);
 
     if (!domain) {
@@ -123,7 +123,7 @@ export async function updateDomainHandler(req: AuthenticatedRequest, res: Respon
       return;
     }
 
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { description, isDefault, isPublic } = req.body;
 
     const updated = await updateDomain(id, { description, isDefault, isPublic });
@@ -163,7 +163,7 @@ export async function deleteDomainHandler(req: AuthenticatedRequest, res: Respon
       return;
     }
 
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const deleted = await deleteDomain(id);
 
@@ -201,7 +201,7 @@ export async function toggleDomainHandler(req: AuthenticatedRequest, res: Respon
       return;
     }
 
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const updated = await toggleDomainStatus(id);
 

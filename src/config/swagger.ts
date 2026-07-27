@@ -5,7 +5,7 @@ const options: swaggerJsdoc.Options = {
     openapi: '3.0.0',
     info: {
       title: 'MakeAnon API',
-      version: '2.0.0',
+      version: '2.1.1',
       description: `
 MakeAnon is an email masking service that allows you to create unlimited email aliases to protect your real email address from spam, data breaches, and unwanted tracking.
 

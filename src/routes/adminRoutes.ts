@@ -138,7 +138,7 @@ router.get('/users', async (req: AuthenticatedRequest, res: Response) => {
 
 router.put('/users/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { isActive, isAdmin, maxAliases } = req.body;
 
     // Prevent self-demotion
@@ -237,7 +237,7 @@ router.get('/aliases', async (req: AuthenticatedRequest, res: Response) => {
 
 router.delete('/aliases/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const alias = await prisma.alias.findUnique({ where: { id } });
     if (!alias) {
@@ -270,7 +270,7 @@ router.get('/logs', async (req: AuthenticatedRequest, res: Response) => {
     const skip = (Number(page) - 1) * Number(limit);
 
     const where: any = {};
-    if (status) where.status = status;
+    if (status) where.status = String(status);
     if (search) {
       where.OR = [
         { toAlias: { contains: String(search) } },

@@ -88,7 +88,7 @@ All emails sent to your alias are forwarded to your real address. Your real emai
 
 | Component | Technology | Version |
 |-----------|-----------|---------|
-| Runtime | Node.js | >=18.0.0 |
+| Runtime | Node.js | >=20.0.0 |
 | Framework | Express | 5.x |
 | Language | TypeScript | 5.x |
 | ORM | Prisma | 7.x |
@@ -97,7 +97,7 @@ All emails sent to your alias are forwarded to your real address. Your real emai
 | Inbound SMTP | smtp-server | 3.x |
 | Outbound SMTP | Haraka (DKIM) | latest |
 | Email parsing | mailparser | 3.x |
-| Email sending | nodemailer | 7.x |
+| Email sending | nodemailer | 8.x |
 | Auth | jsonwebtoken + bcryptjs | — |
 | Validation | express-validator + zod | — |
 | Logging | winston | 3.x |
@@ -167,7 +167,7 @@ Outbound emails are signed with RSA-2048 DKIM keys via Haraka. Each domain has i
 ### Security Headers
 
 - **Helmet.js** - Sets secure HTTP headers (X-Content-Type-Options, X-Frame-Options, etc.)
-- **CORS** - Configurable origins (default: `*`)
+- **CORS** - Configurable allowed origin via `CORS_ORIGIN` (defaults to `BASE_URL`; never use `*` in production)
 - **HSTS / CSP** - Enforced via Caddy reverse proxy
 - **Trust proxy** - Enabled for accurate IP detection behind reverse proxy
 
@@ -210,11 +210,12 @@ All endpoints are prefixed with `/api/v1`.
 | `POST` | `/verify/resend` | Resend verification email |
 | `POST` | `/management-link` | Request management link resend |
 | `GET` | `/manage/:token` | Get alias details by management token |
-| `PUT` | `/manage/:token` | Update alias via management token |
+| `PUT` / `PATCH` | `/manage/:token` | Update alias via management token |
 | `DELETE` | `/manage/:token` | Delete alias via management token |
 | `POST` | `/manage/:token/block` | Block a sender (supports glob patterns) |
 | `DELETE` | `/manage/:token/block/:senderId` | Unblock a sender |
 | `GET` | `/domains` | List available domains |
+| `GET` | `/domains/:id` | Get domain details |
 | `GET` | `/health` | Health check (database, Redis, version) |
 | `GET` | `/stats` | Global statistics (cached 1 min) |
 
@@ -264,23 +265,23 @@ Content-Type: application/json
 |--------|----------|-------------|
 | `POST` | `/aliases` | Create private alias |
 | `GET` | `/aliases` | List user's aliases (paginated, filterable) |
-| `GET` | `/aliases/:id` | Get alias with email logs |
-| `PUT` | `/aliases/:id` | Update alias |
-| `DELETE` | `/aliases/:id` | Delete alias |
-| `POST` | `/aliases/:id/toggle` | Toggle active status |
 | `GET` | `/aliases/stats` | User alias statistics |
 | `GET` | `/aliases/logs` | User email logs (paginated) |
+| `GET` | `/aliases/:id` | Get alias with email logs |
+| `PUT` / `PATCH` | `/aliases/:id` | Update alias |
+| `DELETE` | `/aliases/:id` | Delete alias |
+| `POST` | `/aliases/:id/toggle` | Toggle active status |
 
-### Domain Management (Admin Only)
+### Domain Management
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/domains` | List active domains (public) |
-| `GET` | `/domains/:id` | Get domain details (public) |
-| `POST` | `/domains` | Create domain |
-| `PUT` | `/domains/:id` | Update domain |
-| `DELETE` | `/domains/:id` | Delete domain |
-| `POST` | `/domains/:id/toggle` | Toggle domain status |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/domains` | None | List active domains |
+| `GET` | `/domains/:id` | None | Get domain details |
+| `POST` | `/domains` | JWT + Admin | Create domain |
+| `PUT` / `PATCH` | `/domains/:id` | JWT + Admin | Update domain |
+| `DELETE` | `/domains/:id` | JWT + Admin | Delete domain |
+| `POST` | `/domains/:id/toggle` | JWT + Admin | Toggle domain status |
 
 ### Admin (JWT + Admin Role)
 
@@ -304,7 +305,7 @@ The easiest way to deploy MakeAnon is with Docker Compose. The stack includes:
 - **Haraka** - Outbound SMTP relay with DKIM signing
 - **PostgreSQL** - Database with encrypted email storage
 - **Redis** - Caching and rate limiting
-- **Caddy** - Reverse proxy with automatic HTTPS (optional)
+- **Caddy** - Reverse proxy with automatic HTTPS
 
 ```bash
 git clone https://github.com/citizen-123/MakeAnon.git
@@ -313,14 +314,12 @@ cd MakeAnon
 # Configure environment
 cp .env.docker.example .env
 # Edit .env with your settings (see Configuration Reference below)
+# At minimum: DB_PASSWORD, JWT_SECRET, MASTER_ENCRYPTION_KEY, EMAIL_DOMAINS
 
 # Generate DKIM keys for your domains (see DKIM Key Generation below)
 
-# Deploy
+# Deploy (all five containers including Caddy)
 ./scripts/deploy.sh
-
-# Or with Caddy for automatic HTTPS:
-./scripts/deploy.sh --with-caddy
 ```
 
 #### Docker Commands
@@ -334,6 +333,9 @@ docker compose down
 
 # Restart
 docker compose restart
+
+# Open a shell in the app container
+docker compose exec app sh
 
 # Backup database
 ./scripts/backup.sh
@@ -358,7 +360,7 @@ npm run build
 npm start
 ```
 
-Requires: Node.js 18+, PostgreSQL 14+, Redis (optional but recommended)
+Requires: Node.js 20+, PostgreSQL 14+, Redis (optional but strongly recommended for rate limiting and caching).
 
 ### DKIM Key Generation
 
@@ -413,7 +415,7 @@ sed '/^-/d' haraka/config/dkim/yourdomain.com/public | tr -d '\n'
 | `HOST` | `0.0.0.0` | Bind address |
 | `NODE_ENV` | `development` | `development` or `production` |
 | `BASE_URL` | `http://localhost:3000` | Public URL for links in emails |
-| `CORS_ORIGIN` | `https://makeanon.yourdomain.com` | Allowed CORS origin (should match BASE_URL; never use `*` in production) |
+| `CORS_ORIGIN` | value of `BASE_URL` | Allowed CORS origin (never use `*` in production) |
 
 ### SMTP Inbound (Receiving)
 
@@ -444,7 +446,6 @@ sed '/^-/d' haraka/config/dkim/yourdomain.com/public | tr -d '\n'
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JWT_EXPIRES_IN` | `7d` | JWT token expiry |
-| `SESSION_TIMEOUT_HOURS` | `24` | Session timeout |
 | `ADMIN_EMAIL` | `admin@yourdomain.com` | Default admin account email |
 | `ADMIN_PASSWORD` | — | Default admin account password |
 
@@ -463,7 +464,6 @@ sed '/^-/d' haraka/config/dkim/yourdomain.com/public | tr -d '\n'
 |----------|---------|-------------|
 | `MAX_ALIASES_PER_EMAIL` | `10` | Max aliases per email (anonymous) |
 | `MAX_ALIASES_PER_USER` | `100` | Max aliases per registered user |
-| `MAX_ALIASES_PREMIUM` | `1000` | Max aliases for premium users |
 | `ALIAS_LENGTH` | `8` | Random alias character length |
 | `ALLOW_CUSTOM_ALIASES` | `true` | Allow user-chosen alias names |
 | `MIN_CUSTOM_ALIAS_LENGTH` | `4` | Minimum custom alias length |
@@ -473,7 +473,7 @@ sed '/^-/d' haraka/config/dkim/yourdomain.com/public | tr -d '\n'
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REQUIRE_EMAIL_VERIFICATION` | `true` | Require email verification for aliases |
+| `REQUIRE_EMAIL_VERIFICATION` | `true` | Require email verification before forwarding |
 | `VERIFICATION_TOKEN_EXPIRY_HOURS` | `24` | Verification token validity |
 | `VERIFICATION_RESEND_COOLDOWN` | `60` | Seconds between verification resends |
 
@@ -482,23 +482,16 @@ sed '/^-/d' haraka/config/dkim/yourdomain.com/public | tr -d '\n'
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LOG` | `ALL` | Email log level: `NONE`, `PRIVATE`, `PUBLIC`, `ALL` |
-| `LOG_LEVEL` | `info` | Application log level |
-| `LOG_FORMAT` | `json` | Log format |
 | `CLEANUP_INTERVAL_HOURS` | `1` | Hours between cleanup runs |
 | `LOG_RETENTION_DAYS` | `30` | Days to retain email logs |
 | `DELETE_INACTIVE_AFTER_DAYS` | `0` | Delete inactive aliases after N days (0 = disabled) |
 | `DELETE_EXPIRED_ALIASES` | `true` | Auto-delete expired aliases |
 
-### Spam & Webhooks
+### Spam Protection
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BLOCK_DISPOSABLE_EMAILS` | `false` | Block disposable email providers |
-| `SPAM_CHECK_ENABLED` | `false` | Enable spam scoring |
-| `SPAM_THRESHOLD` | `5.0` | Spam score threshold |
-| `WEBHOOKS_ENABLED` | `true` | Enable webhook notifications |
-| `WEBHOOK_TIMEOUT_MS` | `5000` | Webhook request timeout |
-| `WEBHOOK_MAX_RETRIES` | `3` | Webhook retry attempts |
+| `BLOCK_DISPOSABLE_EMAILS` | `false` | Block disposable email providers as alias destinations |
 
 ### Docker-Specific
 
@@ -518,7 +511,7 @@ The database uses PostgreSQL with Prisma ORM. All destination emails are encrypt
 | Model | Key Fields | Notes |
 |-------|-----------|-------|
 | **Domain** | `domain` (unique), `isActive`, `isDefault`, `isPublic`, `aliasCount` | Available alias domains |
-| **User** | `email` (unique), `password`, `isAdmin`, `isActive`, `maxAliases` | Registered user accounts |
+| **User** | `email` (encrypted), `emailHash` (HMAC, unique), `password`, `isAdmin`, `isActive`, `maxAliases` | Registered user accounts; email stored encrypted |
 | **Alias** | `fullAddress` (unique), `destinationEmail` (encrypted), `destinationHash` (HMAC), `managementToken`, `forwardCount`, `disabledAt` | Core alias with encryption fields (`destinationIv`, `destinationSalt`, `destinationAuthTag`) |
 | **BlockedSender** | `aliasId` + `email` (unique pair), `isPattern` | Per-alias sender blocklist, supports glob patterns |
 | **EmailLog** | `fromEmail` (masked), `toAlias`, `status`, `processingTime`, `sizeBytes` | Email activity log, subject stored as null |
@@ -548,6 +541,48 @@ A cleanup job runs automatically at a configurable interval (default: every hour
 | Old email logs | Older than retention period | `LOG_RETENTION_DAYS=30` |
 
 Manual cleanup can be triggered via `POST /api/v1/admin/cleanup` (admin only).
+
+## Development
+
+```bash
+npm run dev          # Dev server with ts-node-dev (auto-restart)
+npm run build        # Compile TypeScript to dist/
+npm start            # Run compiled dist/server.js
+npm test             # Run Jest tests
+npm run test:watch   # Run tests in watch mode
+npm run test:coverage # Tests with coverage report
+npm run typecheck    # Type-check without emitting
+npm run lint         # ESLint
+npm run lint:fix     # ESLint with auto-fix
+npm run db:generate  # Generate Prisma client
+npm run db:push      # Push schema to DB (no migration)
+npm run db:migrate   # Create/apply migration (dev)
+npm run db:migrate:prod # Apply migrations (production)
+npm run db:seed      # Seed database
+npm run db:studio    # Open Prisma Studio
+```
+
+### Project Structure
+
+```
+src/
+  server.ts              # Entry point, startup, cleanup jobs
+  app.ts                 # Express setup, middleware, security headers
+  config/swagger.ts      # OpenAPI/Swagger config
+  controllers/           # Business logic (alias, auth, domain, verify)
+  routes/                # Express routers (public, auth, alias, domain, admin)
+  services/              # Database, SMTP, email, Redis, domain, verification
+  middleware/            # Auth (JWT), error handler, validation
+  utils/                 # Encryption (AES-256-GCM), helpers, logger
+  types/index.ts         # TypeScript interfaces
+  __tests__/             # integration/, unit/, security/
+prisma/
+  schema.prisma          # 6 models: Domain, User, Alias, BlockedSender, EmailLog, VerificationToken
+  seed.ts                # DB seeder
+haraka/                  # Outbound SMTP relay config + DKIM keys
+scripts/                 # deploy, backup, restore, encryption migrations, key rotation
+public/                  # Static frontend (SPA)
+```
 
 ## License
 

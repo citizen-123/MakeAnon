@@ -1,5 +1,5 @@
 # Haraka SMTP Relay with DKIM Signing
-FROM node:20-alpine
+FROM node:22-alpine
 
 # Install build dependencies for native modules and netcat for health checks
 RUN apk add --no-cache python3 make g++ netcat-openbsd

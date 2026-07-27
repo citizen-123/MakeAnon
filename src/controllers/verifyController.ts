@@ -11,7 +11,7 @@ import logger from '../utils/logger';
  */
 export async function verifyAliasEmail(req: Request, res: Response): Promise<void> {
   try {
-    const { token } = req.params;
+    const token = req.params.token as string;
 
     const result = await verifyToken(token, 'alias_verify');
 

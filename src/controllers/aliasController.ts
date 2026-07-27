@@ -264,7 +264,7 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
  */
 export async function getAliasByToken(req: Request, res: Response): Promise<void> {
   try {
-    const { token } = req.params;
+    const token = req.params.token as string;
 
     const alias = await prisma.alias.findUnique({
       where: { managementToken: token },
@@ -339,7 +339,7 @@ export async function getAliasByToken(req: Request, res: Response): Promise<void
  */
 export async function updateAliasByToken(req: Request, res: Response): Promise<void> {
   try {
-    const { token } = req.params;
+    const token = req.params.token as string;
     const { label, description, isActive, replyEnabled }: UpdateAliasInput = req.body;
 
     const alias = await prisma.alias.findUnique({
@@ -403,7 +403,7 @@ export async function updateAliasByToken(req: Request, res: Response): Promise<v
  */
 export async function deleteAliasByToken(req: Request, res: Response): Promise<void> {
   try {
-    const { token } = req.params;
+    const token = req.params.token as string;
 
     const alias = await prisma.alias.findUnique({
       where: { managementToken: token },
@@ -456,7 +456,7 @@ function isValidEmailPattern(pattern: string): boolean {
 
 export async function blockSender(req: Request, res: Response): Promise<void> {
   try {
-    const { token } = req.params;
+    const token = req.params.token as string;
     const { email, reason, isPattern } = req.body;
 
     if (!email) {
@@ -535,7 +535,8 @@ export async function blockSender(req: Request, res: Response): Promise<void> {
  */
 export async function unblockSender(req: Request, res: Response): Promise<void> {
   try {
-    const { token, senderId } = req.params;
+    const token = req.params.token as string;
+    const senderId = req.params.senderId as string;
 
     const alias = await prisma.alias.findUnique({
       where: { managementToken: token },
@@ -815,7 +816,7 @@ export async function getAliases(req: AuthenticatedRequest, res: Response): Prom
 export async function getAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const alias = await prisma.alias.findFirst({
       where: { id, userId },
@@ -856,7 +857,7 @@ export async function getAlias(req: AuthenticatedRequest, res: Response): Promis
 export async function updateAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { label, description, isActive, replyEnabled, expiresAt }: UpdateAliasInput = req.body;
 
     const existing = await prisma.alias.findFirst({
@@ -909,7 +910,7 @@ export async function updateAlias(req: AuthenticatedRequest, res: Response): Pro
 export async function deleteAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const existing = await prisma.alias.findFirst({
       where: { id, userId },
@@ -953,7 +954,7 @@ export async function deleteAlias(req: AuthenticatedRequest, res: Response): Pro
 export async function toggleAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const existing = await prisma.alias.findFirst({
       where: { id, userId },
