@@ -1,10 +1,47 @@
 import { Request, Response } from 'express';
 import prisma from '../services/database';
-import { verifyToken } from '../services/verificationService';
-import { sendManagementLinkEmail } from '../services/verificationService';
-import { createManagementUrl } from '../utils/helpers';
-import { hashEmail } from '../utils/encryption';
+import {
+  verifyToken,
+  sendManagementLinkEmail,
+  sendAliasVerificationEmail,
+} from '../services/verificationService';
+import { invalidateAliasCache } from '../services/redis';
+import { createManagementUrl, isValidEmail } from '../utils/helpers';
+import { hashEmail, decryptEmail, EncryptedData } from '../utils/encryption';
 import logger from '../utils/logger';
+
+const RESEND_VERIFICATION_MESSAGE =
+  'If a matching unverified alias exists, a verification email has been sent.';
+const RESEND_MANAGEMENT_MESSAGE =
+  'If the alias exists, a management link has been sent to the destination email.';
+
+/**
+ * Decrypt an alias's destination address (destinationEmail holds ciphertext
+ * for encrypted rows; legacy rows hold plaintext).
+ */
+function getDestinationEmail(alias: {
+  id: string;
+  destinationEmail: string;
+  destinationIv: string | null;
+  destinationSalt: string | null;
+  destinationAuthTag: string | null;
+  isEncrypted: boolean;
+}): string {
+  if (alias.isEncrypted && alias.destinationIv && alias.destinationSalt && alias.destinationAuthTag) {
+    const encryptedData: EncryptedData = {
+      ciphertext: alias.destinationEmail,
+      iv: alias.destinationIv,
+      salt: alias.destinationSalt,
+      authTag: alias.destinationAuthTag,
+    };
+    return decryptEmail(encryptedData, alias.id);
+  }
+  return alias.destinationEmail;
+}
+
+function isNonEmptyString(value: unknown, maxLength = 320): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLength;
+}
 
 /**
  * Verify an alias email address
@@ -23,17 +60,23 @@ export async function verifyAliasEmail(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const metadata = result.metadata as { aliasAddress: string; managementToken: string };
+    const metadata = (result.metadata || {}) as { aliasId?: unknown };
 
-    // Find and activate the alias
-    const alias = await prisma.alias.findFirst({
-      where: {
-        fullAddress: metadata.aliasAddress,
-        managementToken: metadata.managementToken,
-      },
+    if (typeof metadata.aliasId !== 'string') {
+      // Legacy token format (pre-hashing) or malformed metadata
+      res.status(400).json({
+        success: false,
+        error: 'This verification link is no longer valid. Please request a new one.',
+      });
+      return;
+    }
+
+    const alias = await prisma.alias.findUnique({
+      where: { id: metadata.aliasId },
     });
 
-    if (!alias) {
+    // The token must have been issued for this alias's current destination
+    if (!alias || !result.email || alias.destinationHash !== result.email) {
       res.status(404).json({
         success: false,
         error: 'Alias not found',
@@ -41,25 +84,47 @@ export async function verifyAliasEmail(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Activate the alias
+    // Verify and activate the alias
     await prisma.alias.update({
       where: { id: alias.id },
       data: {
         emailVerified: true,
         isActive: true,
+        disabledAt: null,
       },
     });
 
-    // Send management link
-    const managementUrl = createManagementUrl(alias.managementToken!);
-    await sendManagementLinkEmail(alias.destinationEmail, alias.fullAddress, managementUrl);
+    await invalidateAliasCache(alias.fullAddress);
 
     logger.info(`Alias verified: ${alias.fullAddress}`);
 
-    // Redirect to management page with token pre-filled
     const baseUrl = process.env.BASE_URL || '';
+
+    // Private aliases are managed from the account dashboard (no management token)
+    if (!alias.managementToken) {
+      if (baseUrl) {
+        res.redirect(`${baseUrl}/?verified=true`);
+      } else {
+        res.json({
+          success: true,
+          message: 'Email verified successfully! Your alias is now active.',
+          data: { alias: alias.fullAddress },
+        });
+      }
+      return;
+    }
+
+    // Send management link to the (decrypted) destination
+    const managementUrl = createManagementUrl(alias.managementToken);
+    try {
+      await sendManagementLinkEmail(getDestinationEmail(alias), alias.fullAddress, managementUrl);
+    } catch (error) {
+      logger.error('Failed to send management link after verification:', error);
+    }
+
+    // Redirect to management page with token pre-filled
     if (baseUrl) {
-      res.redirect(`${baseUrl}/#manage?token=${encodeURIComponent(alias.managementToken!)}&verified=true`);
+      res.redirect(`${baseUrl}/#manage?token=${encodeURIComponent(alias.managementToken)}&verified=true`);
     } else {
       res.json({
         success: true,
@@ -80,65 +145,60 @@ export async function verifyAliasEmail(req: Request, res: Response): Promise<voi
 }
 
 /**
- * Resend verification email
+ * Resend verification email.
+ * Always responds with the same 200 body (after input validation) so callers
+ * can't learn whether an alias exists or whether sending succeeded.
  */
 export async function resendVerification(req: Request, res: Response): Promise<void> {
+  const { aliasId, email } = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+
+  if (
+    (aliasId !== undefined && !isNonEmptyString(aliasId, 64)) ||
+    (email !== undefined && !isValidEmail(email))
+  ) {
+    res.status(400).json({
+      success: false,
+      error: 'Invalid alias ID or email',
+    });
+    return;
+  }
+
+  if (!aliasId && !email) {
+    res.status(400).json({
+      success: false,
+      error: 'Please provide alias ID or email',
+    });
+    return;
+  }
+
   try {
-    const { aliasId, email } = req.body;
-
-    if (!aliasId && !email) {
-      res.status(400).json({
-        success: false,
-        error: 'Please provide alias ID or email',
-      });
-      return;
-    }
-
     // Find unverified alias
     const alias = await prisma.alias.findFirst({
       where: {
-        ...(aliasId && { id: aliasId }),
-        ...(email && { destinationHash: hashEmail(email) }),
+        ...(typeof aliasId === 'string' && { id: aliasId }),
+        ...(typeof email === 'string' && { destinationHash: hashEmail(email.toLowerCase()) }),
         emailVerified: false,
       },
     });
 
-    if (!alias) {
-      // Don't reveal whether alias exists
-      res.json({
-        success: true,
-        message: 'If a matching unverified alias exists, a verification email has been sent.',
-      });
-      return;
+    if (alias) {
+      const sent = await sendAliasVerificationEmail(
+        getDestinationEmail(alias),
+        alias.fullAddress,
+        alias.id
+      );
+      if (!sent) {
+        logger.warn(`Verification email not sent for ${alias.fullAddress}`);
+      }
     }
-
-    // Import and use the function
-    const { sendAliasVerificationEmail } = await import('../services/verificationService');
-    const sent = await sendAliasVerificationEmail(
-      alias.destinationEmail,
-      alias.fullAddress,
-      alias.managementToken!
-    );
-
-    if (!sent) {
-      res.status(500).json({
-        success: false,
-        error: 'Failed to send verification email. Please try again later.',
-      });
-      return;
-    }
-
-    res.json({
-      success: true,
-      message: 'If a matching unverified alias exists, a verification email has been sent.',
-    });
   } catch (error) {
     logger.error('Resend verification error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to resend verification email',
-    });
   }
+
+  res.json({
+    success: true,
+    message: RESEND_VERIFICATION_MESSAGE,
+  });
 }
 
 /**
@@ -146,9 +206,9 @@ export async function resendVerification(req: Request, res: Response): Promise<v
  */
 export async function resendManagementLink(req: Request, res: Response): Promise<void> {
   try {
-    const { aliasAddress, destinationEmail } = req.body;
+    const { aliasAddress, destinationEmail } = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
 
-    if (!aliasAddress || !destinationEmail) {
+    if (!isNonEmptyString(aliasAddress, 320) || !isValidEmail(destinationEmail)) {
       res.status(400).json({
         success: false,
         error: 'Please provide both alias address and destination email',
@@ -160,26 +220,24 @@ export async function resendManagementLink(req: Request, res: Response): Promise
     const alias = await prisma.alias.findFirst({
       where: {
         fullAddress: aliasAddress.toLowerCase(),
-        destinationHash: hashEmail(destinationEmail),
+        destinationHash: hashEmail(destinationEmail.toLowerCase()),
         isPrivate: false, // Only for public aliases
       },
     });
 
-    if (!alias || !alias.managementToken) {
-      // Don't reveal whether alias exists
-      res.json({
-        success: true,
-        message: 'If the alias exists, a management link has been sent to the destination email.',
-      });
-      return;
+    if (alias && alias.managementToken) {
+      const managementUrl = createManagementUrl(alias.managementToken);
+      try {
+        await sendManagementLinkEmail(getDestinationEmail(alias), alias.fullAddress, managementUrl);
+      } catch (error) {
+        logger.error('Resend management link send error:', error);
+      }
     }
 
-    const managementUrl = createManagementUrl(alias.managementToken);
-    await sendManagementLinkEmail(alias.destinationEmail, alias.fullAddress, managementUrl);
-
+    // Don't reveal whether alias exists
     res.json({
       success: true,
-      message: 'If the alias exists, a management link has been sent to the destination email.',
+      message: RESEND_MANAGEMENT_MESSAGE,
     });
   } catch (error) {
     logger.error('Resend management link error:', error);

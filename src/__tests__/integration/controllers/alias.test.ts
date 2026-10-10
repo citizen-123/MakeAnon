@@ -41,9 +41,9 @@ jest.mock('../../../services/database', () => ({
 }));
 
 jest.mock('../../../services/redis', () => ({
-  checkRateLimit: jest.fn<any>().mockResolvedValue({ allowed: true, remaining: 9, resetAt: new Date() }),
+  checkRateLimit: jest.fn<(...args: any[]) => any>().mockResolvedValue({ allowed: true, remaining: 9, resetAt: new Date() }),
   cacheAlias: jest.fn(),
-  getCachedAlias: jest.fn<any>().mockResolvedValue(null),
+  getCachedAlias: jest.fn<(...args: any[]) => any>().mockResolvedValue(null),
   invalidateAliasCache: jest.fn(),
   getRedisClient: jest.fn().mockReturnValue({
     status: 'ready',
@@ -51,7 +51,7 @@ jest.mock('../../../services/redis', () => ({
     set: jest.fn(),
     del: jest.fn()
   }),
-  connectRedis: jest.fn<any>().mockResolvedValue(undefined)
+  connectRedis: jest.fn<(...args: any[]) => any>().mockResolvedValue(undefined)
 }));
 
 jest.mock('../../../utils/encryption', () => ({

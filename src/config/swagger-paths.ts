@@ -47,7 +47,6 @@
  *                   properties:
  *                     totalAliases: { type: integer }
  *                     activeAliases: { type: integer }
- *                     totalUsers: { type: integer }
  *                     domainsCount: { type: integer }
  */
 

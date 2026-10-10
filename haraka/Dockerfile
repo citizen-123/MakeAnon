@@ -7,7 +7,7 @@ RUN apk add --no-cache python3 make g++ netcat-openbsd
 WORKDIR /opt/haraka
 
 # Install Haraka globally
-RUN npm install -g Haraka
+RUN npm install -g Haraka@3.1.5
 
 # Remove build dependencies to reduce image size
 RUN apk del python3 make g++

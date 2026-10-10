@@ -10,7 +10,6 @@ mail_from.is_resolvable
 dkim
 
 # Headers
-headers
 
 # QUEUE - Direct delivery to MX servers
 queue/deliver

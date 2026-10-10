@@ -149,8 +149,8 @@ export async function checkRateLimit(
   const resetAt = new Date(Date.now() + windowSeconds * 1000);
 
   if (!redis || !isConnected) {
-    // If Redis is unavailable, allow the request but log it
-    logger.warn('Rate limiting unavailable - Redis not connected');
+    // If Redis is unavailable, fail open (allow the request) but make it visible
+    logger.warn('Rate limiting unavailable - Redis not connected, failing open');
     return { allowed: true, remaining: limit - 1, resetAt };
   }
 
@@ -158,22 +158,22 @@ export async function checkRateLimit(
   const rateLimitKey = key(`ratelimit:${hashedId}`);
 
   try {
-    const multi = redis.multi();
-    multi.incr(rateLimitKey);
-    multi.ttl(rateLimitKey);
-    const results = await multi.exec();
+    // INCR + EXPIRE NX + TTL in one MULTI so the counter can never be left
+    // without a TTL (EXPIRE NX only sets the expiry if none exists yet).
+    const results = await redis
+      .multi()
+      .incr(rateLimitKey)
+      .expire(rateLimitKey, windowSeconds, 'NX')
+      .ttl(rateLimitKey)
+      .exec();
 
-    if (!results) {
+    if (!results || results.some(([err]) => err)) {
+      logger.warn('Rate limit transaction failed - failing open');
       return { allowed: true, remaining: limit - 1, resetAt };
     }
 
     const count = results[0][1] as number;
-    const ttl = results[1][1] as number;
-
-    // Set expiry if this is a new key
-    if (ttl === -1) {
-      await redis.expire(rateLimitKey, windowSeconds);
-    }
+    const ttl = results[2][1] as number;
 
     const remaining = Math.max(0, limit - count);
     const actualResetAt = ttl > 0 ? new Date(Date.now() + ttl * 1000) : resetAt;
@@ -184,8 +184,52 @@ export async function checkRateLimit(
       resetAt: actualResetAt,
     };
   } catch (error) {
-    logger.error('Rate limit check error:', error);
+    logger.warn('Rate limit check error - failing open:', error);
     return { allowed: true, remaining: limit - 1, resetAt };
+  }
+}
+
+// ============================================================================
+// Delivery De-duplication (for SMTP retries after partial failures)
+// ============================================================================
+
+const DELIVERY_RECORD_TTL = 24 * 60 * 60; // 24 hours
+
+function deliveryKey(deliveryId: string): string {
+  const hashed = crypto.createHash('sha256').update(deliveryId).digest('hex');
+  return key(`delivered:${hashed}`);
+}
+
+/**
+ * Check whether a (message, recipient) delivery was already recorded.
+ * Returns false when Redis is unavailable (prefer a duplicate over a lost message).
+ */
+export async function isDeliveryRecorded(deliveryId: string): Promise<boolean> {
+  if (!redis || !isConnected) return false;
+
+  try {
+    return (await redis.exists(deliveryKey(deliveryId))) === 1;
+  } catch (error) {
+    logger.warn('Delivery record lookup error:', error);
+    return false;
+  }
+}
+
+/**
+ * Record a successful (message, recipient) delivery (SET NX with TTL).
+ */
+export async function recordDelivery(
+  deliveryId: string,
+  ttlSeconds = DELIVERY_RECORD_TTL
+): Promise<boolean> {
+  if (!redis || !isConnected) return false;
+
+  try {
+    const result = await redis.set(deliveryKey(deliveryId), '1', 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
+  } catch (error) {
+    logger.warn('Delivery record store error:', error);
+    return false;
   }
 }
 
@@ -263,6 +307,8 @@ export default {
   cacheDelete,
   cacheDeletePattern,
   checkRateLimit,
+  isDeliveryRecorded,
+  recordDelivery,
   storeToken,
   getToken,
   deleteToken,

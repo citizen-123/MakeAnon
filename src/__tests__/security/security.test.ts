@@ -5,7 +5,7 @@
  * Tests for common vulnerabilities and security best practices
  */
 
-import { describe, it, expect, jest } from '@jest/globals';
+import { describe, it, expect } from '@jest/globals';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
@@ -477,7 +477,7 @@ describe('Security Tests', () => {
     });
 
     it('should not expose database errors', () => {
-      const dbError = new Error('UNIQUE constraint failed: users.email');
+      const _dbError = new Error('UNIQUE constraint failed: users.email');
       const sanitizedMessage = 'Email already exists';
 
       expect(sanitizedMessage).not.toContain('UNIQUE');

@@ -5,6 +5,7 @@ import {
   createVerificationUrl,
   calculateExpiresAt,
 } from '../utils/helpers';
+import { hashEmail } from '../utils/encryption';
 import logger from '../utils/logger';
 
 const TOKEN_EXPIRY_HOURS = parseInt(process.env.VERIFICATION_TOKEN_EXPIRY_HOURS || '24');
@@ -17,7 +18,11 @@ export interface CreateVerificationTokenResult {
 }
 
 /**
- * Create a verification token for an email address
+ * Create a verification token for an email address.
+ *
+ * Privacy: the plaintext address is never stored. The `email` column holds the
+ * HMAC (hashEmail) of the address, and metadata must not contain secrets such
+ * as management tokens (store record IDs and look them up instead).
  */
 export async function createVerificationToken(
   email: string,
@@ -25,11 +30,16 @@ export async function createVerificationToken(
   metadata?: Record<string, unknown>
 ): Promise<CreateVerificationTokenResult> {
   try {
-    // Check for existing unexpired token
+    const emailHash = hashEmail(email.toLowerCase());
+    const metadataJson = metadata ? JSON.stringify(metadata) : null;
+
+    // Check for existing unexpired token (scoped to the same subject, e.g. the
+    // same alias, so verifying one alias doesn't block another)
     const existing = await prisma.verificationToken.findFirst({
       where: {
-        email: email.toLowerCase(),
+        email: emailHash,
         type,
+        ...(metadataJson !== null && { metadata: metadataJson }),
         expiresAt: { gt: new Date() },
         usedAt: null,
       },
@@ -54,10 +64,10 @@ export async function createVerificationToken(
 
     await prisma.verificationToken.create({
       data: {
-        email: email.toLowerCase(),
+        email: emailHash,
         token,
         type,
-        metadata: metadata ? JSON.stringify(metadata) : null,
+        metadata: metadataJson,
         expiresAt,
       },
     });
@@ -77,12 +87,17 @@ export async function verifyToken(
   expectedType?: string
 ): Promise<{
   success: boolean;
+  /** HMAC hash of the address the token was issued for (never plaintext) */
   email?: string;
   type?: string;
   metadata?: Record<string, unknown>;
   error?: string;
 }> {
   try {
+    if (typeof token !== 'string' || token.length === 0 || token.length > 256) {
+      return { success: false, error: 'Invalid verification token' };
+    }
+
     const verification = await prisma.verificationToken.findUnique({
       where: { token },
     });
@@ -103,11 +118,15 @@ export async function verifyToken(
       return { success: false, error: 'Invalid token type' };
     }
 
-    // Mark token as used
-    await prisma.verificationToken.update({
-      where: { id: verification.id },
+    // Mark token as used (conditional on still unused, so concurrent requests
+    // can't both consume it)
+    const consumed = await prisma.verificationToken.updateMany({
+      where: { id: verification.id, usedAt: null },
       data: { usedAt: new Date() },
     });
+    if (consumed.count === 0) {
+      return { success: false, error: 'This verification link has already been used' };
+    }
 
     return {
       success: true,
@@ -122,17 +141,18 @@ export async function verifyToken(
 }
 
 /**
- * Send verification email for a new alias
+ * Send verification email for a new alias.
+ * The alias does not forward mail until the destination is verified.
  */
 export async function sendAliasVerificationEmail(
   destinationEmail: string,
   aliasAddress: string,
-  managementToken: string
+  aliasId: string
 ): Promise<boolean> {
   const tokenResult = await createVerificationToken(
     destinationEmail,
     'alias_verify',
-    { aliasAddress, managementToken }
+    { aliasId }
   );
 
   if (!tokenResult.success || !tokenResult.token) {
@@ -151,7 +171,7 @@ You (or someone) created an email alias that forwards to this address:
 Alias: ${aliasAddress}
 Forwards to: ${destinationEmail}
 
-Your alias is ACTIVE and ready to forward emails!
+Your alias will NOT forward any email until you confirm this address.
 
 IMPORTANT: Verify your email within 72 hours or your alias will be automatically deleted.
 
@@ -194,16 +214,16 @@ MakeAnon - Email Masking Service
       </div>
 
       <div class="success">
-        <p style="margin: 0; color: #065f46; font-weight: 600;">Your alias is ACTIVE and ready to forward emails!</p>
+        <p style="margin: 0; color: #065f46; font-weight: 600;">Your alias will start forwarding emails as soon as you verify this address.</p>
       </div>
 
       <div class="warning">
         <p style="margin: 0 0 10px 0; color: #dc2626; font-weight: 600;">Action Required: Verify within 72 hours</p>
-        <p style="margin: 0; color: #7f1d1d; font-size: 14px;">Unverified aliases are automatically deleted after 72 hours. Click the button below to keep your alias.</p>
+        <p style="margin: 0; color: #7f1d1d; font-size: 14px;">Unverified aliases are automatically deleted after 72 hours. Click the button below to activate your alias.</p>
       </div>
 
       <p style="text-align: center;">
-        <a href="${verificationUrl}" class="button">Verify Email & Keep Alias</a>
+        <a href="${verificationUrl}" class="button">Verify Email &amp; Activate Alias</a>
       </p>
 
       <p style="font-size: 13px; color: #6b7280; margin-top: 20px;">

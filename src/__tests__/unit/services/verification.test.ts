@@ -15,6 +15,7 @@ jest.mock('../../../services/database', () => ({
       findFirst: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
       deleteMany: jest.fn()
     },
     $connect: jest.fn(),
@@ -48,8 +49,10 @@ import {
   createVerificationToken,
   verifyToken,
   sendManagementLinkEmail,
+  sendAliasVerificationEmail,
   cleanupExpiredTokens,
 } from '../../../services/verificationService';
+import { hashEmail } from '../../../utils/encryption';
 
 describe('Verification Service', () => {
   beforeEach(() => {
@@ -68,8 +71,8 @@ describe('Verification Service', () => {
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
       };
 
-      (prisma.verificationToken.findFirst as jest.Mock<any>).mockResolvedValue(null);
-      (prisma.verificationToken.create as jest.Mock<any>).mockResolvedValue(mockToken);
+      (prisma.verificationToken.findFirst as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
+      (prisma.verificationToken.create as jest.Mock<(...args: any[]) => any>).mockResolvedValue(mockToken);
 
       const result = await createVerificationToken('user@example.com', 'alias_verify');
 
@@ -86,7 +89,7 @@ describe('Verification Service', () => {
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
       };
 
-      (prisma.verificationToken.findFirst as jest.Mock<any>).mockResolvedValue(recentToken);
+      (prisma.verificationToken.findFirst as jest.Mock<(...args: any[]) => any>).mockResolvedValue(recentToken);
 
       const result = await createVerificationToken('user@example.com', 'alias_verify');
 
@@ -102,8 +105,8 @@ describe('Verification Service', () => {
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
       };
 
-      (prisma.verificationToken.findFirst as jest.Mock<any>).mockResolvedValue(oldToken);
-      (prisma.verificationToken.create as jest.Mock<any>).mockResolvedValue({
+      (prisma.verificationToken.findFirst as jest.Mock<(...args: any[]) => any>).mockResolvedValue(oldToken);
+      (prisma.verificationToken.create as jest.Mock<(...args: any[]) => any>).mockResolvedValue({
         token: 'new-token'
       });
 
@@ -113,8 +116,8 @@ describe('Verification Service', () => {
     });
 
     it('should store metadata with token', async () => {
-      (prisma.verificationToken.findFirst as jest.Mock<any>).mockResolvedValue(null);
-      (prisma.verificationToken.create as jest.Mock<any>).mockResolvedValue({
+      (prisma.verificationToken.findFirst as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
+      (prisma.verificationToken.create as jest.Mock<(...args: any[]) => any>).mockResolvedValue({
         token: 'test-token'
       });
 
@@ -129,25 +132,53 @@ describe('Verification Service', () => {
     });
 
     it('should lowercase email addresses', async () => {
-      (prisma.verificationToken.findFirst as jest.Mock<any>).mockResolvedValue(null);
-      (prisma.verificationToken.create as jest.Mock<any>).mockResolvedValue({});
+      (prisma.verificationToken.findFirst as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
+      (prisma.verificationToken.create as jest.Mock<(...args: any[]) => any>).mockResolvedValue({});
 
       await createVerificationToken('User@EXAMPLE.COM', 'alias_verify');
 
       expect(prisma.verificationToken.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          email: 'user@example.com'
+          email: hashEmail('user@example.com')
         })
       });
     });
 
     it('should return error on database failure', async () => {
-      (prisma.verificationToken.findFirst as jest.Mock<any>).mockRejectedValue(new Error('DB Error'));
+      (prisma.verificationToken.findFirst as jest.Mock<(...args: any[]) => any>).mockRejectedValue(new Error('DB Error'));
 
       const result = await createVerificationToken('user@example.com', 'alias_verify');
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Failed to create verification token');
+    });
+  });
+
+  describe('privacy of stored tokens', () => {
+    it('should store a hash of the email, never the plaintext', async () => {
+      (prisma.verificationToken.findFirst as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
+      (prisma.verificationToken.create as jest.Mock<(...args: any[]) => any>).mockResolvedValue({});
+
+      await createVerificationToken('User@Example.com', 'alias_verify', { aliasId: 'alias-1' });
+
+      const data = ((prisma.verificationToken.create as jest.Mock<(...args: any[]) => any>).mock.calls[0][0] as any).data;
+      expect(data.email).toBe(hashEmail('user@example.com'));
+      expect(data.email).not.toContain('@');
+      expect(JSON.parse(data.metadata)).toEqual({ aliasId: 'alias-1' });
+    });
+
+    it('sendAliasVerificationEmail should not put the management token in metadata', async () => {
+      (prisma.verificationToken.findFirst as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
+      (prisma.verificationToken.create as jest.Mock<(...args: any[]) => any>).mockResolvedValue({});
+      (emailService.sendNotification as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ success: true });
+
+      const ok = await sendAliasVerificationEmail('user@example.com', 'abc@test.example.com', 'alias-1');
+
+      expect(ok).toBe(true);
+      const data = ((prisma.verificationToken.create as jest.Mock<(...args: any[]) => any>).mock.calls[0][0] as any).data;
+      expect(JSON.parse(data.metadata)).toEqual({ aliasId: 'alias-1' });
+      // Mail still goes to the plaintext address
+      expect((emailService.sendNotification as jest.Mock<(...args: any[]) => any>).mock.calls[0][0]).toBe('user@example.com');
     });
   });
 
@@ -163,8 +194,8 @@ describe('Verification Service', () => {
         usedAt: null
       };
 
-      (prisma.verificationToken.findUnique as jest.Mock<any>).mockResolvedValue(validToken);
-      (prisma.verificationToken.update as jest.Mock<any>).mockResolvedValue({});
+      (prisma.verificationToken.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(validToken);
+      (prisma.verificationToken.updateMany as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ count: 1 });
 
       const result = await verifyToken('valid-token');
 
@@ -185,19 +216,42 @@ describe('Verification Service', () => {
         usedAt: null
       };
 
-      (prisma.verificationToken.findUnique as jest.Mock<any>).mockResolvedValue(validToken);
-      (prisma.verificationToken.update as jest.Mock<any>).mockResolvedValue({});
+      (prisma.verificationToken.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(validToken);
+      (prisma.verificationToken.updateMany as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ count: 1 });
 
       await verifyToken('valid-token');
 
-      expect(prisma.verificationToken.update).toHaveBeenCalledWith({
-        where: { id: 'token-1' },
+      expect(prisma.verificationToken.updateMany).toHaveBeenCalledWith({
+        where: { id: 'token-1', usedAt: null },
         data: { usedAt: expect.any(Date) }
       });
     });
 
+    it('should reject a token consumed concurrently', async () => {
+      (prisma.verificationToken.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue({
+        id: 'token-1',
+        token: 'valid-token',
+        type: 'alias_verify',
+        metadata: null,
+        expiresAt: new Date(Date.now() + 60000),
+        usedAt: null
+      });
+      (prisma.verificationToken.updateMany as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ count: 0 });
+
+      const result = await verifyToken('valid-token');
+
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject non-string tokens without querying', async () => {
+      const result = await verifyToken({ not: '' } as unknown as string);
+
+      expect(result.success).toBe(false);
+      expect(prisma.verificationToken.findUnique).not.toHaveBeenCalled();
+    });
+
     it('should reject invalid token', async () => {
-      (prisma.verificationToken.findUnique as jest.Mock<any>).mockResolvedValue(null);
+      (prisma.verificationToken.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
 
       const result = await verifyToken('invalid-token');
 
@@ -213,7 +267,7 @@ describe('Verification Service', () => {
         expiresAt: new Date(Date.now() + 60000)
       };
 
-      (prisma.verificationToken.findUnique as jest.Mock<any>).mockResolvedValue(usedToken);
+      (prisma.verificationToken.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(usedToken);
 
       const result = await verifyToken('used-token');
 
@@ -229,7 +283,7 @@ describe('Verification Service', () => {
         expiresAt: new Date(Date.now() - 60000) // Expired
       };
 
-      (prisma.verificationToken.findUnique as jest.Mock<any>).mockResolvedValue(expiredToken);
+      (prisma.verificationToken.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(expiredToken);
 
       const result = await verifyToken('expired-token');
 
@@ -246,7 +300,7 @@ describe('Verification Service', () => {
         expiresAt: new Date(Date.now() + 60000)
       };
 
-      (prisma.verificationToken.findUnique as jest.Mock<any>).mockResolvedValue(validToken);
+      (prisma.verificationToken.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(validToken);
 
       const result = await verifyToken('valid-token', 'password_reset');
 
@@ -255,7 +309,7 @@ describe('Verification Service', () => {
     });
 
     it('should handle database errors gracefully', async () => {
-      (prisma.verificationToken.findUnique as jest.Mock<any>).mockRejectedValue(new Error('DB Error'));
+      (prisma.verificationToken.findUnique as jest.Mock<(...args: any[]) => any>).mockRejectedValue(new Error('DB Error'));
 
       const result = await verifyToken('any-token');
 
@@ -266,7 +320,7 @@ describe('Verification Service', () => {
 
   describe('sendManagementLinkEmail', () => {
     it('should send management link email', async () => {
-      (emailService.sendNotification as jest.Mock<any>).mockResolvedValue({ success: true });
+      (emailService.sendNotification as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ success: true });
 
       const result = await sendManagementLinkEmail(
         'user@example.com',
@@ -279,7 +333,7 @@ describe('Verification Service', () => {
     });
 
     it('should return false on email failure', async () => {
-      (emailService.sendNotification as jest.Mock<any>).mockResolvedValue({ success: false });
+      (emailService.sendNotification as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ success: false });
 
       const result = await sendManagementLinkEmail(
         'user@example.com',
@@ -293,7 +347,7 @@ describe('Verification Service', () => {
 
   describe('cleanupExpiredTokens', () => {
     it('should delete expired tokens', async () => {
-      (prisma.verificationToken.deleteMany as jest.Mock<any>).mockResolvedValue({ count: 5 });
+      (prisma.verificationToken.deleteMany as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ count: 5 });
 
       const result = await cleanupExpiredTokens();
 
@@ -306,7 +360,7 @@ describe('Verification Service', () => {
     });
 
     it('should return 0 on error', async () => {
-      (prisma.verificationToken.deleteMany as jest.Mock<any>).mockRejectedValue(new Error('DB Error'));
+      (prisma.verificationToken.deleteMany as jest.Mock<(...args: any[]) => any>).mockRejectedValue(new Error('DB Error'));
 
       const result = await cleanupExpiredTokens();
 

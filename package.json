@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev": "node --watch -r ts-node/register/transpile-only src/server.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:prod": "prisma migrate deploy",
@@ -16,8 +16,8 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "lint": "eslint src/**/*.ts",
-    "lint:fix": "eslint src/**/*.ts --fix",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit"
   },
@@ -50,7 +50,7 @@
     "jsonwebtoken": "^9.0.3",
     "mailparser": "^3.9.14",
     "nanoid": "^3.3.11",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^10.0.16",
     "pg": "^8.20.0",
     "rate-limit-redis": "^4.3.1",
     "smtp-server": "^3.19.2",
@@ -79,7 +79,6 @@
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
-    "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
   },
   "overrides": {

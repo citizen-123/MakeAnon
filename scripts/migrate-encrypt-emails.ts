@@ -14,9 +14,14 @@
  */
 
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 import { encryptEmail, hashEmail, verifyEncryptionSetup } from '../src/utils/encryption';
 
-const prisma = new PrismaClient();
+// Prisma 7 requires a driver adapter; `new PrismaClient()` alone fails at runtime.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const adapter = new PrismaPg(pool, { schema: 'public' });
+const prisma = new PrismaClient({ adapter });
 
 async function migrateEmails() {
   console.log('Starting email encryption migration...\n');

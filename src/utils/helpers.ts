@@ -99,15 +99,61 @@ export function isReplyAddress(email: string): boolean {
 /**
  * Validate email format
  */
-export function isValidEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export function isValidEmail(email: unknown): email is string {
+  if (typeof email !== 'string' || email.length > 254) return false;
+  // Reject whitespace (incl. CR/LF), control chars, angle brackets, quotes and commas
+  // so the value can never smuggle extra recipients or headers.
+  const emailRegex = /^[^\s@<>",\x00-\x1f\x7f]+@[^\s@<>",\x00-\x1f\x7f]+\.[^\s@<>",\x00-\x1f\x7f]+$/;
   return emailRegex.test(email);
+}
+
+/**
+ * Local parts that must never be claimable as custom aliases
+ * (role accounts, RFC 2142 mailboxes, CA validation addresses, etc.)
+ */
+export const RESERVED_LOCAL_PARTS: ReadonlySet<string> = new Set([
+  'admin',
+  'administrator',
+  'hostmaster',
+  'webmaster',
+  'postmaster',
+  'abuse',
+  'security',
+  'root',
+  'noreply',
+  'no-reply',
+  'support',
+  'info',
+  'mailer-daemon',
+  'ssl-admin',
+  'ssladmin',
+  'ssl',
+  'www',
+  'ftp',
+  'usenet',
+  'news',
+  'uucp',
+  'marketing',
+  'sales',
+  'billing',
+  'privacy',
+  'legal',
+  'contact',
+  'help',
+]);
+
+/**
+ * Check whether a local part is reserved (case-insensitive, exact match)
+ */
+export function isReservedLocalPart(localPart: string): boolean {
+  return RESERVED_LOCAL_PARTS.has(localPart.toLowerCase());
 }
 
 /**
  * Validate custom alias format
  */
-export function isValidCustomAlias(alias: string): boolean {
+export function isValidCustomAlias(alias: unknown): alias is string {
+  if (typeof alias !== 'string') return false;
   const minLength = parseInt(process.env.MIN_CUSTOM_ALIAS_LENGTH || '4');
   const maxLength = 32;
 
@@ -118,7 +164,8 @@ export function isValidCustomAlias(alias: string): boolean {
     alias.length >= minLength &&
     alias.length <= maxLength &&
     aliasRegex.test(alias) &&
-    !alias.startsWith('r') // Reserved for reply addresses
+    !alias.toLowerCase().startsWith('r') && // Reserved for reply addresses
+    !isReservedLocalPart(alias)
   );
 }
 
@@ -155,7 +202,9 @@ export function getBaseUrl(): string {
  * Create management URL for an alias
  */
 export function createManagementUrl(managementToken: string): string {
-  return `${getBaseUrl()}/manage/${managementToken}`;
+  // Token goes in the URL fragment so it is never sent to the server (and never
+  // lands in access logs); the SPA reads #manage?token=...
+  return `${getBaseUrl()}/#manage?token=${encodeURIComponent(managementToken)}`;
 }
 
 /**
@@ -172,6 +221,65 @@ export function calculateExpiresAt(days: number): Date {
   const date = new Date();
   date.setDate(date.getDate() + days);
   return date;
+}
+
+export const MIN_EXPIRES_IN_DAYS = 1;
+export const MAX_EXPIRES_IN_DAYS = 365;
+
+/**
+ * Validate an expiresIn value (days). Accepts undefined/null (no expiry) or an
+ * integer number of days within [MIN_EXPIRES_IN_DAYS, MAX_EXPIRES_IN_DAYS].
+ */
+export function parseExpiresInDays(
+  value: unknown
+): { valid: true; days: number | null } | { valid: false } {
+  if (value === undefined || value === null) return { valid: true, days: null };
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < MIN_EXPIRES_IN_DAYS ||
+    value > MAX_EXPIRES_IN_DAYS
+  ) {
+    return { valid: false };
+  }
+  return { valid: true, days: value };
+}
+
+/**
+ * Validate an optional free-text field. undefined = not provided; null/'' clears it.
+ * Returns an error message if invalid.
+ */
+export function validateOptionalText(
+  value: unknown,
+  field: string,
+  maxLength: number
+): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') return `${field} must be a string`;
+  if (value.length > maxLength) return `${field} must be at most ${maxLength} characters`;
+  return null;
+}
+
+export const MAX_LABEL_LENGTH = 100;
+export const MAX_DESCRIPTION_LENGTH = 500;
+export const MAX_REASON_LENGTH = 200;
+
+/**
+ * Parse page/limit query params, clamping to sane bounds with NaN fallback
+ */
+export function parsePagination(
+  pageRaw: unknown,
+  limitRaw: unknown,
+  defaultLimit = 20,
+  maxLimit = 100
+): { page: number; limit: number; skip: number } {
+  let page = parseInt(String(pageRaw ?? ''), 10);
+  if (!Number.isFinite(page) || page < 1) page = 1;
+  page = Math.min(page, 100000);
+  let limit = parseInt(String(limitRaw ?? ''), 10);
+  if (!Number.isFinite(limit)) limit = defaultLimit;
+  limit = Math.min(Math.max(limit, 1), maxLimit);
+  return { page, limit, skip: (page - 1) * limit };
 }
 
 /**

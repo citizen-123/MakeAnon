@@ -67,14 +67,31 @@ async function api(endpoint, options = {}) {
     }
 }
 
-// Toast notifications
+// Escape a value for safe interpolation into HTML (text and quoted attributes)
+function escapeHtml(value) {
+    return String(value === undefined || value === null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// Toast notifications (built with textContent - messages may contain server/user text)
 function showToast(message, type = 'success') {
     const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    toast.innerHTML = `
-        <span class="toast-icon">${type === 'success' ? '✓' : '✕'}</span>
-        <span class="toast-message">${message}</span>
-    `;
+    toast.className = `toast toast-${type === 'success' ? 'success' : 'error'}`;
+
+    const icon = document.createElement('span');
+    icon.className = 'toast-icon';
+    icon.textContent = type === 'success' ? '✓' : '✕';
+
+    const text = document.createElement('span');
+    text.className = 'toast-message';
+    text.textContent = String(message);
+
+    toast.appendChild(icon);
+    toast.appendChild(text);
     elements.toastContainer.appendChild(toast);
 
     setTimeout(() => {
@@ -146,9 +163,13 @@ async function loadDomains() {
         const response = await api('/domains');
         state.domains = response.data;
 
-        elements.domainSelect.innerHTML = state.domains
-            .map(d => `<option value="${d.id}" ${d.isDefault ? 'selected' : ''}>@${d.domain}</option>`)
-            .join('');
+        elements.domainSelect.replaceChildren(...state.domains.map(d => {
+            const option = document.createElement('option');
+            option.value = d.id;
+            option.textContent = `@${d.domain}`;
+            option.selected = !!d.isDefault;
+            return option;
+        }));
 
         updateAliasPreview();
     } catch (error) {
@@ -207,11 +228,11 @@ async function createAlias(e) {
         document.getElementById('successDetails').innerHTML = `
             <div class="detail-row">
                 <span class="detail-label">Alias Address</span>
-                <span class="detail-value">${alias.fullAddress || alias.alias}</span>
+                <span class="detail-value">${escapeHtml(alias.fullAddress || alias.alias)}</span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Forwards To</span>
-                <span class="detail-value">${alias.destinationEmail}</span>
+                <span class="detail-value">${escapeHtml(alias.destinationEmail)}</span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Status</span>
@@ -226,7 +247,7 @@ async function createAlias(e) {
                 <p style="margin: 0 0 8px 0; font-weight: 600; color: #92400e;">Save Your Management Token</p>
                 <p style="margin: 0 0 12px 0; font-size: 0.75rem; color: #a16207;">You'll need this token to manage, disable, or delete your alias.</p>
                 <div style="display: flex; gap: 8px; align-items: center;">
-                    <input type="text" readonly value="${alias.managementToken}" id="successTokenInput"
+                    <input type="text" readonly value="${escapeHtml(alias.managementToken)}" id="successTokenInput"
                         style="flex: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-family: monospace; font-size: 0.875rem; background: white;">
                     <button type="button" class="btn btn-outline" id="copyTokenBtn" style="white-space: nowrap;">
                         Copy
@@ -238,15 +259,18 @@ async function createAlias(e) {
                 <button type="button" class="btn btn-primary" id="manageNowBtn" style="flex: 1;">
                     Manage Alias
                 </button>
-                <button type="button" class="btn btn-outline" onclick="closeAllModals()" style="flex: 1;">
+                <button type="button" class="btn btn-outline" id="successDoneBtn" style="flex: 1;">
                     Done
                 </button>
             </div>
 
+            ${alias.emailVerified ? '' : `
             <p class="text-muted mt-3" style="font-size: 0.75rem; color: #f59e0b; text-align: center;">
-                Verify your email within 72 hours or your alias will be deleted.
-            </p>
+                Check your inbox: your alias will not forward email until you verify it. Unverified aliases are deleted after 72 hours.
+            </p>`}
         `;
+
+        document.getElementById('successDoneBtn').addEventListener('click', closeAllModals);
 
         // Add event listeners for the new buttons
         document.getElementById('copyTokenBtn').addEventListener('click', () => {
@@ -305,7 +329,7 @@ async function manageWithToken(e) {
     state.currentManagementToken = token;
 
     try {
-        const response = await api(`/manage/${token}`);
+        const response = await api(`/manage/${encodeURIComponent(token)}`);
         const alias = response.data;
 
         // Build deletion warning if scheduled
@@ -315,8 +339,8 @@ async function manageWithToken(e) {
             deletionWarning = `
                 <div class="deletion-warning" style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
                     <div style="color: #dc2626; font-weight: 600; margin-bottom: 4px;">Scheduled for Deletion</div>
-                    <div style="color: #7f1d1d; font-size: 0.875rem;">${alias.scheduledDeletion.reason}</div>
-                    <div style="color: #991b1b; font-size: 0.875rem; margin-top: 4px;">Will be deleted on: <strong>${deletionDate}</strong></div>
+                    <div style="color: #7f1d1d; font-size: 0.875rem;">${escapeHtml(alias.scheduledDeletion.reason)}</div>
+                    <div style="color: #991b1b; font-size: 0.875rem; margin-top: 4px;">Will be deleted on: <strong>${escapeHtml(deletionDate)}</strong></div>
                 </div>
             `;
         }
@@ -326,17 +350,23 @@ async function manageWithToken(e) {
             ${deletionWarning}
             <div class="detail-row">
                 <span class="detail-label">Alias Address</span>
-                <span class="detail-value">${alias.fullAddress || alias.alias}</span>
+                <span class="detail-value">${escapeHtml(alias.fullAddress || alias.alias)}</span>
             </div>
+            ${alias.label ? `
+            <div class="detail-row">
+                <span class="detail-label">Label</span>
+                <span class="detail-value">${escapeHtml(alias.label)}</span>
+            </div>
+            ` : ''}
             <div class="detail-row">
                 <span class="detail-label">Forwards To</span>
-                <span class="detail-value">${alias.destinationEmail}</span>
+                <span class="detail-value">${escapeHtml(alias.destinationEmail)}</span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Status</span>
                 <span class="detail-value">
                     <span class="alias-status ${alias.isActive ? 'status-active' : 'status-inactive'}">
-                        ${alias.isActive ? 'Active' : 'Inactive'}
+                        ${alias.isActive ? 'Active' : (alias.emailVerified ? 'Inactive' : 'Pending Verification')}
                     </span>
                 </span>
             </div>
@@ -346,23 +376,27 @@ async function manageWithToken(e) {
             </div>
             <div class="detail-row">
                 <span class="detail-label">Emails Forwarded</span>
-                <span class="detail-value" style="font-weight: 600; color: #4F46E5;">${alias.forwardCount || 0}</span>
+                <span class="detail-value" style="font-weight: 600; color: #4F46E5;">${escapeHtml(Number(alias.forwardCount) || 0)}</span>
             </div>
             <div class="detail-row">
                 <span class="detail-label">Created</span>
-                <span class="detail-value">${formatDate(alias.createdAt)}</span>
+                <span class="detail-value">${escapeHtml(formatDate(alias.createdAt))}</span>
             </div>
             ${alias.lastForwardAt ? `
             <div class="detail-row">
                 <span class="detail-label">Last Forward</span>
-                <span class="detail-value">${formatDate(alias.lastForwardAt)}</span>
+                <span class="detail-value">${escapeHtml(formatDate(alias.lastForwardAt))}</span>
             </div>
             ` : ''}
 
             <div class="mt-4" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                ${alias.emailVerified ? `
                 <button class="btn ${alias.isActive ? 'btn-outline' : 'btn-success'}" id="toggleAliasBtn">
                     ${alias.isActive ? 'Disable Alias' : 'Enable Alias'}
-                </button>
+                </button>` : `
+                <button class="btn btn-success" id="resendVerificationBtn">
+                    Resend Verification Email
+                </button>`}
                 <button class="btn btn-danger" id="deleteAliasBtn">
                     Delete Alias
                 </button>
@@ -380,9 +414,17 @@ async function manageWithToken(e) {
         `;
 
         // Attach event listeners to the buttons
-        document.getElementById('toggleAliasBtn').addEventListener('click', () => {
-            togglePublicAlias(!alias.isActive);
-        });
+        const toggleBtn = document.getElementById('toggleAliasBtn');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+                togglePublicAlias(!alias.isActive);
+            });
+        }
+
+        const resendBtn = document.getElementById('resendVerificationBtn');
+        if (resendBtn) {
+            resendBtn.addEventListener('click', () => resendVerification(alias.id));
+        }
 
         document.getElementById('deleteAliasBtn').addEventListener('click', deletePublicAlias);
 
@@ -394,12 +436,30 @@ async function manageWithToken(e) {
     }
 }
 
+// Resend verification email for an unverified alias
+async function resendVerification(aliasId) {
+    try {
+        const response = await api('/verify/resend', {
+            method: 'POST',
+            body: JSON.stringify({ aliasId })
+        });
+        showToast(response.message || 'Verification email sent');
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+// Path segment for the current management token
+function managePath() {
+    return `/manage/${encodeURIComponent(state.currentManagementToken)}`;
+}
+
 // Toggle public alias
 async function togglePublicAlias(activate) {
     if (!state.currentManagementToken) return;
 
     try {
-        await api(`/manage/${state.currentManagementToken}`, {
+        await api(managePath(), {
             method: 'PUT',
             body: JSON.stringify({ isActive: activate })
         });
@@ -417,7 +477,7 @@ async function deletePublicAlias() {
     if (!confirm('Are you sure you want to delete this alias? This cannot be undone.')) return;
 
     try {
-        await api(`/manage/${state.currentManagementToken}`, { method: 'DELETE' });
+        await api(managePath(), { method: 'DELETE' });
         showToast('Alias deleted');
         elements.tokenAliasDetails.classList.add('hidden');
         document.getElementById('managementToken').value = '';
@@ -435,7 +495,7 @@ async function blockPublicSender(e) {
     const email = document.getElementById('publicBlockEmail').value;
 
     try {
-        await api(`/manage/${state.currentManagementToken}/block`, {
+        await api(`${managePath()}/block`, {
             method: 'POST',
             body: JSON.stringify({ email })
         });
@@ -506,6 +566,11 @@ async function init() {
 
             // Fill in the token
             document.getElementById('managementToken').value = token;
+
+            // Remove the token from the address bar / history
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#manage`);
+            }
 
             // Show success message if just verified
             if (verified) {

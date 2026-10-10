@@ -25,7 +25,7 @@ jest.mock('../../../services/database', () => ({
 }));
 
 jest.mock('../../../services/redis', () => ({
-  getCachedDomains: jest.fn<any>().mockResolvedValue(null),
+  getCachedDomains: jest.fn<(...args: any[]) => any>().mockResolvedValue(null),
   cacheDomains: jest.fn(),
   invalidateDomainsCache: jest.fn()
 }));
@@ -65,7 +65,7 @@ describe('Domain Service', () => {
       const cachedDomains = [
         { id: '1', domain: 'example.com', isDefault: true, aliasCount: 10 }
       ];
-      (redis.getCachedDomains as jest.Mock<any>).mockResolvedValue(cachedDomains);
+      (redis.getCachedDomains as jest.Mock<(...args: any[]) => any>).mockResolvedValue(cachedDomains);
 
       const result = await getActiveDomains();
 
@@ -77,10 +77,10 @@ describe('Domain Service', () => {
       const dbDomains = [
         { id: '1', domain: 'example.com', description: null, isDefault: true, aliasCount: 10 }
       ];
-      (redis.getCachedDomains as jest.Mock<any>).mockResolvedValue(null);
-      (prisma.domain.findMany as jest.Mock<any>).mockResolvedValue(dbDomains);
+      (redis.getCachedDomains as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
+      (prisma.domain.findMany as jest.Mock<(...args: any[]) => any>).mockResolvedValue(dbDomains);
 
-      const result = await getActiveDomains();
+      await getActiveDomains();
 
       expect(prisma.domain.findMany).toHaveBeenCalledWith({
         where: { isActive: true, isPublic: true },
@@ -96,8 +96,8 @@ describe('Domain Service', () => {
     });
 
     it('should return empty array on database error', async () => {
-      (redis.getCachedDomains as jest.Mock<any>).mockResolvedValue(null);
-      (prisma.domain.findMany as jest.Mock<any>).mockRejectedValue(new Error('DB Error'));
+      (redis.getCachedDomains as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
+      (prisma.domain.findMany as jest.Mock<(...args: any[]) => any>).mockRejectedValue(new Error('DB Error'));
 
       const result = await getActiveDomains();
 
@@ -108,7 +108,7 @@ describe('Domain Service', () => {
   describe('getDomainById', () => {
     it('should return domain by ID', async () => {
       const domain = { id: '1', domain: 'example.com', isDefault: true };
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue(domain);
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(domain);
 
       const result = await getDomainById('1');
 
@@ -120,7 +120,7 @@ describe('Domain Service', () => {
     });
 
     it('should return null for non-existent ID', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue(null);
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
 
       const result = await getDomainById('nonexistent');
 
@@ -128,7 +128,7 @@ describe('Domain Service', () => {
     });
 
     it('should return null on error', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockRejectedValue(new Error('DB Error'));
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockRejectedValue(new Error('DB Error'));
 
       const result = await getDomainById('1');
 
@@ -139,7 +139,7 @@ describe('Domain Service', () => {
   describe('getDomainByName', () => {
     it('should return domain by name', async () => {
       const domain = { id: '1', domain: 'example.com', isDefault: true };
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue(domain);
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(domain);
 
       const result = await getDomainByName('example.com');
 
@@ -151,7 +151,7 @@ describe('Domain Service', () => {
     });
 
     it('should convert domain name to lowercase', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue(null);
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
 
       await getDomainByName('Example.COM');
 
@@ -168,7 +168,7 @@ describe('Domain Service', () => {
         { id: '2', domain: 'other.com', isDefault: false },
         { id: '1', domain: 'example.com', isDefault: true }
       ];
-      (redis.getCachedDomains as jest.Mock<any>).mockResolvedValue(domains);
+      (redis.getCachedDomains as jest.Mock<(...args: any[]) => any>).mockResolvedValue(domains);
 
       const result = await getDefaultDomain();
 
@@ -179,7 +179,7 @@ describe('Domain Service', () => {
       const domains = [
         { id: '1', domain: 'example.com', isDefault: false }
       ];
-      (redis.getCachedDomains as jest.Mock<any>).mockResolvedValue(domains);
+      (redis.getCachedDomains as jest.Mock<(...args: any[]) => any>).mockResolvedValue(domains);
 
       const result = await getDefaultDomain();
 
@@ -187,7 +187,7 @@ describe('Domain Service', () => {
     });
 
     it('should return null if no domains', async () => {
-      (redis.getCachedDomains as jest.Mock<any>).mockResolvedValue([]);
+      (redis.getCachedDomains as jest.Mock<(...args: any[]) => any>).mockResolvedValue([]);
 
       const result = await getDefaultDomain();
 
@@ -204,7 +204,7 @@ describe('Domain Service', () => {
         isDefault: false,
         aliasCount: 0
       };
-      (prisma.domain.create as jest.Mock<any>).mockResolvedValue(newDomain);
+      (prisma.domain.create as jest.Mock<(...args: any[]) => any>).mockResolvedValue(newDomain);
 
       const result = await createDomain({
         domain: 'newdomain.com',
@@ -217,8 +217,8 @@ describe('Domain Service', () => {
 
     it('should unset other defaults when creating default domain', async () => {
       const newDomain = { id: '1', domain: 'default.com', isDefault: true };
-      (prisma.domain.updateMany as jest.Mock<any>).mockResolvedValue({ count: 1 });
-      (prisma.domain.create as jest.Mock<any>).mockResolvedValue(newDomain);
+      (prisma.domain.updateMany as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ count: 1 });
+      (prisma.domain.create as jest.Mock<(...args: any[]) => any>).mockResolvedValue(newDomain);
 
       await createDomain({ domain: 'default.com', isDefault: true });
 
@@ -229,7 +229,7 @@ describe('Domain Service', () => {
     });
 
     it('should convert domain to lowercase', async () => {
-      (prisma.domain.create as jest.Mock<any>).mockResolvedValue({ domain: 'example.com' });
+      (prisma.domain.create as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ domain: 'example.com' });
 
       await createDomain({ domain: 'EXAMPLE.COM' });
 
@@ -242,7 +242,7 @@ describe('Domain Service', () => {
     });
 
     it('should return null on error', async () => {
-      (prisma.domain.create as jest.Mock<any>).mockRejectedValue(new Error('DB Error'));
+      (prisma.domain.create as jest.Mock<(...args: any[]) => any>).mockRejectedValue(new Error('DB Error'));
 
       const result = await createDomain({ domain: 'example.com' });
 
@@ -253,7 +253,7 @@ describe('Domain Service', () => {
   describe('updateDomain', () => {
     it('should update domain', async () => {
       const updatedDomain = { id: '1', domain: 'updated.com', isDefault: false };
-      (prisma.domain.update as jest.Mock<any>).mockResolvedValue(updatedDomain);
+      (prisma.domain.update as jest.Mock<(...args: any[]) => any>).mockResolvedValue(updatedDomain);
 
       const result = await updateDomain('1', { domain: 'updated.com' });
 
@@ -262,8 +262,8 @@ describe('Domain Service', () => {
     });
 
     it('should unset other defaults when setting as default', async () => {
-      (prisma.domain.updateMany as jest.Mock<any>).mockResolvedValue({ count: 1 });
-      (prisma.domain.update as jest.Mock<any>).mockResolvedValue({ id: '1', isDefault: true });
+      (prisma.domain.updateMany as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ count: 1 });
+      (prisma.domain.update as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ id: '1', isDefault: true });
 
       await updateDomain('1', { isDefault: true });
 
@@ -274,7 +274,7 @@ describe('Domain Service', () => {
     });
 
     it('should return null on error', async () => {
-      (prisma.domain.update as jest.Mock<any>).mockRejectedValue(new Error('DB Error'));
+      (prisma.domain.update as jest.Mock<(...args: any[]) => any>).mockRejectedValue(new Error('DB Error'));
 
       const result = await updateDomain('1', { description: 'test' });
 
@@ -284,11 +284,11 @@ describe('Domain Service', () => {
 
   describe('deleteDomain', () => {
     it('should delete domain with no aliases', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue({
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue({
         domain: 'example.com',
         aliasCount: 0
       });
-      (prisma.domain.delete as jest.Mock<any>).mockResolvedValue({});
+      (prisma.domain.delete as jest.Mock<(...args: any[]) => any>).mockResolvedValue({});
 
       const result = await deleteDomain('1');
 
@@ -298,7 +298,7 @@ describe('Domain Service', () => {
     });
 
     it('should not delete domain with aliases', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue({
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue({
         domain: 'example.com',
         aliasCount: 5
       });
@@ -310,7 +310,7 @@ describe('Domain Service', () => {
     });
 
     it('should return false for non-existent domain', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue(null);
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
 
       const result = await deleteDomain('nonexistent');
 
@@ -318,7 +318,7 @@ describe('Domain Service', () => {
     });
 
     it('should return false on error', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockRejectedValue(new Error('DB Error'));
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockRejectedValue(new Error('DB Error'));
 
       const result = await deleteDomain('1');
 
@@ -328,10 +328,10 @@ describe('Domain Service', () => {
 
   describe('toggleDomainStatus', () => {
     it('should toggle domain from active to inactive', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue({ isActive: true });
-      (prisma.domain.update as jest.Mock<any>).mockResolvedValue({ id: '1', isActive: false });
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ isActive: true });
+      (prisma.domain.update as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ id: '1', isActive: false });
 
-      const result = await toggleDomainStatus('1');
+      await toggleDomainStatus('1');
 
       expect(prisma.domain.update).toHaveBeenCalledWith({
         where: { id: '1' },
@@ -341,10 +341,10 @@ describe('Domain Service', () => {
     });
 
     it('should toggle domain from inactive to active', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue({ isActive: false });
-      (prisma.domain.update as jest.Mock<any>).mockResolvedValue({ id: '1', isActive: true });
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ isActive: false });
+      (prisma.domain.update as jest.Mock<(...args: any[]) => any>).mockResolvedValue({ id: '1', isActive: true });
 
-      const result = await toggleDomainStatus('1');
+      await toggleDomainStatus('1');
 
       expect(prisma.domain.update).toHaveBeenCalledWith({
         where: { id: '1' },
@@ -354,7 +354,7 @@ describe('Domain Service', () => {
     });
 
     it('should return null for non-existent domain', async () => {
-      (prisma.domain.findUnique as jest.Mock<any>).mockResolvedValue(null);
+      (prisma.domain.findUnique as jest.Mock<(...args: any[]) => any>).mockResolvedValue(null);
 
       const result = await toggleDomainStatus('nonexistent');
 
@@ -364,7 +364,7 @@ describe('Domain Service', () => {
 
   describe('incrementDomainAliasCount', () => {
     it('should increment alias count', async () => {
-      (prisma.domain.update as jest.Mock<any>).mockResolvedValue({});
+      (prisma.domain.update as jest.Mock<(...args: any[]) => any>).mockResolvedValue({});
 
       await incrementDomainAliasCount('domain-1');
 
@@ -378,7 +378,7 @@ describe('Domain Service', () => {
 
   describe('decrementDomainAliasCount', () => {
     it('should decrement alias count', async () => {
-      (prisma.domain.update as jest.Mock<any>).mockResolvedValue({});
+      (prisma.domain.update as jest.Mock<(...args: any[]) => any>).mockResolvedValue({});
 
       await decrementDomainAliasCount('domain-1');
 

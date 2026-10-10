@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
 # MakeAnon Deployment Script
 # Usage: ./scripts/deploy.sh [--with-caddy]

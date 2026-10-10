@@ -36,14 +36,14 @@ jest.mock('../../../services/database', () => ({
 }));
 
 jest.mock('../../../services/redis', () => ({
-  checkRateLimit: jest.fn<any>().mockResolvedValue({ allowed: true, remaining: 9, resetAt: new Date() }),
+  checkRateLimit: jest.fn<(...args: any[]) => any>().mockResolvedValue({ allowed: true, remaining: 9, resetAt: new Date() }),
   cacheAlias: jest.fn(),
-  getCachedAlias: jest.fn<any>().mockResolvedValue(null),
+  getCachedAlias: jest.fn<(...args: any[]) => any>().mockResolvedValue(null),
   invalidateAliasCache: jest.fn(),
-  getCachedDomains: jest.fn<any>().mockResolvedValue(null),
+  getCachedDomains: jest.fn<(...args: any[]) => any>().mockResolvedValue(null),
   cacheDomains: jest.fn(),
   getRedisClient: jest.fn().mockReturnValue({ status: 'ready' }),
-  connectRedis: jest.fn<any>().mockResolvedValue(undefined)
+  connectRedis: jest.fn<(...args: any[]) => any>().mockResolvedValue(undefined)
 }));
 
 jest.mock('../../../utils/encryption', () => ({
@@ -255,7 +255,7 @@ describe('API Response Format', () => {
     });
 
     it('should not expose internal errors', () => {
-      const internalError = 'UNIQUE constraint failed: aliases.alias';
+      const _internalError = 'UNIQUE constraint failed: aliases.alias';
       const userError = 'This alias is already taken';
 
       expect(userError).not.toContain('constraint');

@@ -46,3 +46,4 @@ haraka/config/internalcmd_key
 # Temporary files
 tmp/
 temp/
+backups/

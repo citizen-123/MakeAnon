@@ -31,12 +31,12 @@ export async function listDomains(req: Request, res: Response): Promise<void> {
 }
 
 /**
- * Get domain by ID (public)
+ * Get domain by ID (public) - only active, public domains are visible here
  */
 export async function getDomain(req: Request, res: Response): Promise<void> {
   try {
     const id = req.params.id as string;
-    const domain = await getDomainById(id);
+    const domain = await getDomainById(id, { activeOnly: true, publicOnly: true });
 
     if (!domain) {
       res.status(404).json({
@@ -78,7 +78,7 @@ export async function createDomainHandler(req: AuthenticatedRequest, res: Respon
 
     const { domain, description, isDefault, isPublic } = req.body;
 
-    if (!domain) {
+    if (!domain || typeof domain !== 'string') {
       res.status(400).json({
         success: false,
         error: 'Domain name is required',

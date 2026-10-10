@@ -17,10 +17,14 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
+/**
+ * JWT claims. Deliberately minimal: no email or role is embedded in the token;
+ * those are loaded from the database on every authenticated request.
+ */
 export interface JwtPayload {
   id: string;
-  email: string;
-  isAdmin: boolean;
+  /** User.tokenVersion at issue time; bumping it revokes all outstanding tokens */
+  tv: number;
   iat?: number;
   exp?: number;
 }

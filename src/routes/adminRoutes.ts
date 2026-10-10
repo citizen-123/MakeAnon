@@ -1,9 +1,52 @@
 import { Router, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import prisma from '../services/database';
 import { authenticate } from '../middleware/auth';
 import { AuthenticatedRequest } from '../types';
 import { hashEmail } from '../utils/encryption';
+import { invalidateAliasCache } from '../services/redis';
+import { deleteAliasesWhere, invalidateUserAliasCaches } from '../services/aliasCleanup';
+import { parsePagination } from '../utils/helpers';
 import logger from '../utils/logger';
+
+/**
+ * Admin-safe alias fields. Deliberately excludes managementToken, replyPrefix
+ * and the destination ciphertext/iv/salt/authTag/hash.
+ */
+const ADMIN_ALIAS_SELECT = {
+  id: true,
+  alias: true,
+  fullAddress: true,
+  domainId: true,
+  emailVerified: true,
+  label: true,
+  description: true,
+  isActive: true,
+  isPrivate: true,
+  forwardCount: true,
+  lastForwardAt: true,
+  blockedCount: true,
+  disabledAt: true,
+  replyEnabled: true,
+  userId: true,
+  createdAt: true,
+  updatedAt: true,
+  expiresAt: true,
+  domain: { select: { domain: true } },
+} as const;
+
+/**
+ * Admin-safe user fields (no password hash, no email ciphertext)
+ */
+const ADMIN_USER_SELECT = {
+  id: true,
+  name: true,
+  isActive: true,
+  isAdmin: true,
+  emailVerified: true,
+  maxAliases: true,
+  createdAt: true,
+} as const;
 
 const router = Router();
 
@@ -85,33 +128,25 @@ router.get('/stats', async (req: AuthenticatedRequest, res: Response) => {
 
 router.get('/users', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { page = 1, limit = 20, search } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
+    const { search } = req.query;
+    const { page, limit, skip } = parsePagination(req.query.page, req.query.limit, 20, 100);
 
-    const where = search
-      ? {
-          OR: [
-            { email: { contains: String(search) } },
-            { name: { contains: String(search) } },
-          ],
-        }
-      : {};
+    // Emails are encrypted at rest: an email search is an exact match on the HMAC
+    let where = {};
+    if (typeof search === 'string' && search.length > 0 && search.length <= 320) {
+      where = search.includes('@')
+        ? { emailHash: hashEmail(search) }
+        : { name: { contains: search } };
+    }
 
     const [users, total] = await Promise.all([
       prisma.user.findMany({
         where,
         skip,
-        take: Number(limit),
+        take: limit,
         orderBy: { createdAt: 'desc' },
         select: {
-          id: true,
-          email: true,
-          name: true,
-          isActive: true,
-          isAdmin: true,
-          emailVerified: true,
-          maxAliases: true,
-          createdAt: true,
+          ...ADMIN_USER_SELECT,
           _count: { select: { aliases: true } },
         },
       }),
@@ -121,12 +156,12 @@ router.get('/users', async (req: AuthenticatedRequest, res: Response) => {
     res.json({
       success: true,
       data: {
-        items: users.map((u) => ({ ...u, aliasCount: u._count.aliases })),
+        items: users.map(({ _count, ...u }) => ({ ...u, aliasCount: _count.aliases })),
         pagination: {
-          page: Number(page),
-          limit: Number(limit),
+          page,
+          limit,
           total,
-          totalPages: Math.ceil(total / Number(limit)),
+          totalPages: Math.ceil(total / limit),
         },
       },
     });
@@ -139,7 +174,17 @@ router.get('/users', async (req: AuthenticatedRequest, res: Response) => {
 router.put('/users/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const id = req.params.id as string;
-    const { isActive, isAdmin, maxAliases } = req.body;
+    const { isActive, isAdmin, maxAliases } = (req.body || {}) as Record<string, unknown>;
+
+    if (
+      (isActive !== undefined && typeof isActive !== 'boolean') ||
+      (isAdmin !== undefined && typeof isAdmin !== 'boolean') ||
+      (maxAliases !== undefined &&
+        (typeof maxAliases !== 'number' || !Number.isInteger(maxAliases) || maxAliases < 0 || maxAliases > 100000))
+    ) {
+      res.status(400).json({ success: false, error: 'Invalid user update' });
+      return;
+    }
 
     // Prevent self-demotion
     if (id === req.user!.id && isAdmin === false) {
@@ -150,22 +195,27 @@ router.put('/users/:id', async (req: AuthenticatedRequest, res: Response) => {
       return;
     }
 
+    const existing = await prisma.user.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'User not found' });
+      return;
+    }
+
     const user = await prisma.user.update({
       where: { id },
       data: {
-        ...(isActive !== undefined && { isActive }),
-        ...(isAdmin !== undefined && { isAdmin }),
-        ...(maxAliases !== undefined && { maxAliases }),
+        ...(isActive !== undefined && { isActive: isActive as boolean }),
+        ...(isAdmin !== undefined && { isAdmin: isAdmin as boolean }),
+        ...(maxAliases !== undefined && { maxAliases: maxAliases as number }),
       },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        isActive: true,
-        isAdmin: true,
-        maxAliases: true,
-      },
+      select: ADMIN_USER_SELECT,
     });
+
+    // Activation changes affect whether the user's aliases forward; drop cached
+    // alias records so the mail path re-reads owner state.
+    if (isActive !== undefined) {
+      await invalidateUserAliasCaches(id);
+    }
 
     res.json({
       success: true,
@@ -184,22 +234,21 @@ router.put('/users/:id', async (req: AuthenticatedRequest, res: Response) => {
 
 router.get('/aliases', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { page = 1, limit = 20, search, active } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
+    const { search, active } = req.query;
+    const { page, limit, skip } = parsePagination(req.query.page, req.query.limit, 20, 100);
 
-    const where: any = {};
-    if (search) {
-      const searchStr = String(search);
+    const where: Prisma.AliasWhereInput = {};
+    if (typeof search === 'string' && search.length > 0 && search.length <= 320) {
       where.OR = [
-        { alias: { contains: searchStr } },
-        { fullAddress: { contains: searchStr } },
+        { alias: { contains: search } },
+        { fullAddress: { contains: search } },
       ];
       // destinationEmail is encrypted — use hash-based exact match for email searches
-      if (searchStr.includes('@')) {
-        where.OR.push({ destinationHash: hashEmail(searchStr) });
+      if (search.includes('@')) {
+        where.OR.push({ destinationHash: hashEmail(search) });
       }
     }
-    if (active !== undefined) {
+    if (typeof active === 'string') {
       where.isActive = active === 'true';
     }
 
@@ -207,12 +256,9 @@ router.get('/aliases', async (req: AuthenticatedRequest, res: Response) => {
       prisma.alias.findMany({
         where,
         skip,
-        take: Number(limit),
+        take: limit,
         orderBy: { createdAt: 'desc' },
-        include: {
-          domain: { select: { domain: true } },
-          user: { select: { email: true } },
-        },
+        select: ADMIN_ALIAS_SELECT,
       }),
       prisma.alias.count({ where }),
     ]);
@@ -222,10 +268,10 @@ router.get('/aliases', async (req: AuthenticatedRequest, res: Response) => {
       data: {
         items: aliases,
         pagination: {
-          page: Number(page),
-          limit: Number(limit),
+          page,
+          limit,
           total,
-          totalPages: Math.ceil(total / Number(limit)),
+          totalPages: Math.ceil(total / limit),
         },
       },
     });
@@ -250,6 +296,7 @@ router.delete('/aliases/:id', async (req: AuthenticatedRequest, res: Response) =
       where: { id: alias.domainId },
       data: { aliasCount: { decrement: 1 } },
     });
+    await invalidateAliasCache(alias.fullAddress);
 
     logger.info(`Admin deleted alias: ${alias.fullAddress}`);
 
@@ -266,14 +313,14 @@ router.delete('/aliases/:id', async (req: AuthenticatedRequest, res: Response) =
 
 router.get('/logs', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { page = 1, limit = 50, status, search } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
+    const { status, search } = req.query;
+    const { page, limit, skip } = parsePagination(req.query.page, req.query.limit, 50, 100);
 
-    const where: any = {};
-    if (status) where.status = String(status);
-    if (search) {
+    const where: Prisma.EmailLogWhereInput = {};
+    if (typeof status === 'string' && status.length > 0) where.status = status;
+    if (typeof search === 'string' && search.length > 0 && search.length <= 320) {
       where.OR = [
-        { toAlias: { contains: String(search) } },
+        { toAlias: { contains: search } },
       ];
     }
 
@@ -281,7 +328,7 @@ router.get('/logs', async (req: AuthenticatedRequest, res: Response) => {
       prisma.emailLog.findMany({
         where,
         skip,
-        take: Number(limit),
+        take: limit,
         orderBy: { createdAt: 'desc' },
         include: {
           alias: { select: { fullAddress: true, label: true } },
@@ -295,10 +342,10 @@ router.get('/logs', async (req: AuthenticatedRequest, res: Response) => {
       data: {
         items: logs,
         pagination: {
-          page: Number(page),
-          limit: Number(limit),
+          page,
+          limit,
           total,
-          totalPages: Math.ceil(total / Number(limit)),
+          totalPages: Math.ceil(total / limit),
         },
       },
     });
@@ -322,10 +369,7 @@ router.post('/cleanup', async (req: AuthenticatedRequest, res: Response) => {
     // Clean expired aliases if configured
     let expiredAliases = 0;
     if (process.env.DELETE_EXPIRED_ALIASES === 'true') {
-      const result = await prisma.alias.deleteMany({
-        where: { expiresAt: { lt: new Date() } },
-      });
-      expiredAliases = result.count;
+      expiredAliases = await deleteAliasesWhere({ expiresAt: { lt: new Date() } });
     }
 
     // Clean old logs if configured

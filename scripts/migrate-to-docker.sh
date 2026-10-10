@@ -2,7 +2,7 @@
 # MakeAnon Migration Script - Native to Docker
 # This script migrates from systemd services to Docker Compose
 
-set -e
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -134,10 +134,12 @@ start_containers() {
     for i in {1..30}; do
         if docker compose exec -T postgres pg_isready -U makeanon -d makeanon &>/dev/null; then
             log_info "PostgreSQL is ready"
-            break
+            return 0
         fi
         sleep 1
     done
+    log_error "PostgreSQL container did not become ready within 30s"
+    exit 1
 }
 
 # Migrate database
@@ -154,10 +156,14 @@ migrate_database() {
         docker compose exec -T postgres psql -U makeanon -d postgres -c "DROP DATABASE IF EXISTS makeanon;" || true
         docker compose exec -T postgres psql -U makeanon -d postgres -c "CREATE DATABASE makeanon;"
 
-        # Restore
-        cat "$BACKUP_DIR/emask_backup.dump" | docker compose exec -T postgres pg_restore -U makeanon -d makeanon --no-owner --no-privileges || {
-            log_warn "Some errors during restore (usually safe to ignore)"
-        }
+        # Restore. A failed restore is fatal: continuing would stop and
+        # disable the native PostgreSQL (the only good copy) while the
+        # container DB is incomplete.
+        if ! cat "$BACKUP_DIR/emask_backup.dump" | docker compose exec -T postgres pg_restore -U makeanon -d makeanon --no-owner --no-privileges; then
+            log_error "pg_restore reported errors. Aborting before native databases are stopped."
+            log_error "Native PostgreSQL is still running; backup is at $BACKUP_DIR. Run $BACKUP_DIR/rollback.sh to revert."
+            exit 1
+        fi
 
         log_info "Database migration complete"
     else

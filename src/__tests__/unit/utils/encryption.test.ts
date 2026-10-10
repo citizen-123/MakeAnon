@@ -4,7 +4,7 @@
  * Tests for the encryption module that handles email encryption/decryption
  */
 
-import { describe, it, expect, beforeEach, afterEach, beforeAll } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import {
   encryptEmail,
   decryptEmail,

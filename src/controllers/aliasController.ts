@@ -4,7 +4,7 @@ import prisma from '../services/database';
 import { getDefaultDomain, getDomainById } from '../services/domainService';
 import { sendAliasVerificationEmail, sendManagementLinkEmail } from '../services/verificationService';
 import { checkRateLimit, invalidateAliasCache } from '../services/redis';
-import { AuthenticatedRequest, CreatePublicAliasInput, UpdateAliasInput } from '../types';
+import { AuthenticatedRequest } from '../types';
 import {
   generateAlias,
   generateManagementToken,
@@ -15,6 +15,14 @@ import {
   isValidCustomAlias,
   isDisposableEmail,
   calculateExpiresAt,
+  parseExpiresInDays,
+  parsePagination,
+  validateOptionalText,
+  MAX_EXPIRES_IN_DAYS,
+  MIN_EXPIRES_IN_DAYS,
+  MAX_LABEL_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_REASON_LENGTH,
 } from '../utils/helpers';
 import { encryptEmail, decryptEmail, hashEmail, EncryptedData } from '../utils/encryption';
 import logger from '../utils/logger';
@@ -22,9 +30,60 @@ import logger from '../utils/logger';
 const MAX_ALIASES_PER_EMAIL = parseInt(process.env.MAX_ALIASES_PER_EMAIL || '10');
 const MAX_ALIASES_PER_USER = parseInt(process.env.MAX_ALIASES_PER_USER || '100');
 const ALIAS_CREATION_LIMIT = parseInt(process.env.ALIAS_CREATION_LIMIT_PER_HOUR || '10');
+const ALIAS_CREATION_LIMIT_PER_IP = parseInt(process.env.ALIAS_CREATION_LIMIT_PER_IP_PER_HOUR || '20');
 const ALLOW_CUSTOM_ALIASES = process.env.ALLOW_CUSTOM_ALIASES !== 'false';
-const REQUIRE_VERIFICATION = process.env.REQUIRE_EMAIL_VERIFICATION === 'true'; // Default to false
+// Verification is required unless explicitly disabled
+const REQUIRE_VERIFICATION = process.env.REQUIRE_EMAIL_VERIFICATION !== 'false';
 const BLOCK_DISPOSABLE = process.env.BLOCK_DISPOSABLE_EMAILS === 'true';
+
+const MAX_BLOCK_PATTERN_LENGTH = 254;
+const MAX_BLOCK_PATTERN_WILDCARDS = 5;
+
+const ALIAS_SORT_FIELDS = new Set([
+  'createdAt',
+  'updatedAt',
+  'alias',
+  'fullAddress',
+  'label',
+  'forwardCount',
+  'lastForwardAt',
+  'expiresAt',
+  'isActive',
+]);
+
+type Body = Record<string, unknown>;
+
+function getBody(req: Request): Body {
+  return req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? (req.body as Body) : {};
+}
+
+/**
+ * Validate label/description inputs. Returns an error message or null.
+ */
+function validateLabelAndDescription(label: unknown, description: unknown): string | null {
+  return (
+    validateOptionalText(label, 'label', MAX_LABEL_LENGTH) ||
+    validateOptionalText(description, 'description', MAX_DESCRIPTION_LENGTH)
+  );
+}
+
+const EXPIRES_IN_ERROR = `expiresIn must be an integer number of days between ${MIN_EXPIRES_IN_DAYS} and ${MAX_EXPIRES_IN_DAYS}, or null`;
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === 'boolean';
+}
+
+/**
+ * Compute disabledAt transitions when isActive changes:
+ * - deactivating sets disabledAt (drives 30-day auto-deletion)
+ * - activating clears it
+ */
+function disabledAtTransition(wasActive: boolean, isActive: boolean | undefined): Date | null | undefined {
+  if (isActive === undefined) return undefined;
+  if (isActive === false && wasActive) return new Date();
+  if (isActive === true && !wasActive) return null;
+  return undefined;
+}
 
 /**
  * Strip encryption fields and decrypt destination email for API response
@@ -55,14 +114,47 @@ function decryptAliasForResponse(alias: any): any {
  */
 export async function createPublicAlias(req: Request, res: Response): Promise<void> {
   try {
-    const { destinationEmail, domainId, customAlias, label, description, expiresIn }: CreatePublicAliasInput = req.body;
+    const { destinationEmail, domainId, customAlias, label, description, expiresIn } = getBody(req);
+
+    // Per-IP creation limit (checked first so varying the destination doesn't help)
+    const ipLimit = await checkRateLimit(`alias:create:ip:${req.ip || 'unknown'}`, ALIAS_CREATION_LIMIT_PER_IP, 3600);
+    if (!ipLimit.allowed) {
+      res.status(429).json({
+        success: false,
+        error: 'Too many aliases created. Please try again later.',
+        retryAfter: Math.ceil((ipLimit.resetAt.getTime() - Date.now()) / 1000),
+      });
+      return;
+    }
 
     // Validate destination email
-    if (!destinationEmail || !isValidEmail(destinationEmail)) {
+    if (!isValidEmail(destinationEmail)) {
       res.status(400).json({
         success: false,
         error: 'Please provide a valid destination email address',
       });
+      return;
+    }
+
+    if (domainId !== undefined && domainId !== null && typeof domainId !== 'string') {
+      res.status(400).json({ success: false, error: 'Invalid domain selected' });
+      return;
+    }
+
+    if (customAlias !== undefined && customAlias !== null && typeof customAlias !== 'string') {
+      res.status(400).json({ success: false, error: 'Invalid alias format' });
+      return;
+    }
+
+    const textError = validateLabelAndDescription(label, description);
+    if (textError) {
+      res.status(400).json({ success: false, error: textError });
+      return;
+    }
+
+    const expiry = parseExpiresInDays(expiresIn);
+    if (!expiry.valid) {
+      res.status(400).json({ success: false, error: EXPIRES_IN_ERROR });
       return;
     }
 
@@ -77,8 +169,10 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Rate limiting per destination email
-    const rateLimit = await checkRateLimit(`alias:create:${email}`, ALIAS_CREATION_LIMIT, 3600);
+    const emailHash = hashEmail(email);
+
+    // Rate limiting per destination email (keyed by hash - no plaintext in Redis)
+    const rateLimit = await checkRateLimit(`alias:create:${emailHash}`, ALIAS_CREATION_LIMIT, 3600);
     if (!rateLimit.allowed) {
       res.status(429).json({
         success: false,
@@ -88,22 +182,28 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Check alias limit per email (using hash for privacy)
-    const emailHash = hashEmail(email);
+    // Check alias limit per email (using hash for privacy). Counts aliases that are
+    // active or still pending verification; disabled aliases don't count.
     const existingCount = await prisma.alias.count({
-      where: { destinationHash: emailHash, isPrivate: false },
+      where: {
+        destinationHash: emailHash,
+        isPrivate: false,
+        OR: [{ isActive: true }, { emailVerified: false }],
+      },
     });
 
     if (existingCount >= MAX_ALIASES_PER_EMAIL) {
       res.status(400).json({
         success: false,
-        error: `Maximum number of aliases (${MAX_ALIASES_PER_EMAIL}) for this email reached. Create an account for more aliases.`,
+        error: 'Unable to create an alias for this address right now. Please try again later or create an account.',
       });
       return;
     }
 
-    // Get domain
-    let domain = domainId ? await getDomainById(domainId) : await getDefaultDomain();
+    // Get domain (public aliases may only use active, public domains)
+    const domain = domainId
+      ? await getDomainById(domainId as string, { activeOnly: true, publicOnly: true })
+      : await getDefaultDomain();
     if (!domain) {
       res.status(400).json({
         success: false,
@@ -127,7 +227,7 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
       if (!isValidCustomAlias(customAlias)) {
         res.status(400).json({
           success: false,
-          error: 'Invalid alias format. Use 4-32 alphanumeric characters, dots, hyphens, or underscores.',
+          error: 'Invalid or reserved alias. Use 4-32 alphanumeric characters, dots, hyphens, or underscores.',
         });
         return;
       }
@@ -182,7 +282,8 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
     // Encrypt the destination email
     const encryptedData = encryptEmail(email, tempId);
 
-    // Create alias - always active by default, verification is optional
+    // When verification is required the alias stays inactive (and does not
+    // forward) until the destination owner clicks the verification link.
     const newAlias = await prisma.alias.create({
       data: {
         id: tempId, // Use the same ID we used for encryption
@@ -196,14 +297,14 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
         destinationHash: emailHash,
         isEncrypted: true,
         emailVerified: !REQUIRE_VERIFICATION,
-        label: label || null,
-        description: description || null,
-        isActive: true, // Always active by default
+        label: (label as string | null | undefined) || null,
+        description: (description as string | null | undefined) || null,
+        isActive: !REQUIRE_VERIFICATION,
         isPrivate: false,
         managementToken,
         replyPrefix,
         replyEnabled: false,
-        expiresAt: expiresIn ? calculateExpiresAt(expiresIn) : null,
+        expiresAt: expiry.days ? calculateExpiresAt(expiry.days) : null,
       },
       include: {
         domain: {
@@ -218,9 +319,12 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
       data: { aliasCount: { increment: 1 } },
     });
 
+    // Drop any stale cache entry for this address
+    await invalidateAliasCache(fullAddress);
+
     // Send verification email
     if (REQUIRE_VERIFICATION) {
-      await sendAliasVerificationEmail(email, fullAddress, managementToken);
+      await sendAliasVerificationEmail(email, fullAddress, newAlias.id);
     } else {
       // Send management link directly
       await sendManagementLinkEmail(email, fullAddress, createManagementUrl(managementToken));
@@ -244,7 +348,9 @@ export async function createPublicAlias(req: Request, res: Response): Promise<vo
         expiresAt: newAlias.expiresAt,
         managementToken: managementToken,
       },
-      message: 'Alias created! Please verify your email within 72 hours to keep it active.',
+      message: REQUIRE_VERIFICATION
+        ? 'Alias created! Check your inbox and verify your email within 72 hours to activate it.'
+        : 'Alias created!',
     });
   } catch (error) {
     logger.error('Create public alias error:', error);
@@ -340,7 +446,17 @@ export async function getAliasByToken(req: Request, res: Response): Promise<void
 export async function updateAliasByToken(req: Request, res: Response): Promise<void> {
   try {
     const token = req.params.token as string;
-    const { label, description, isActive, replyEnabled }: UpdateAliasInput = req.body;
+    const { label, description, isActive, replyEnabled } = getBody(req);
+
+    const textError = validateLabelAndDescription(label, description);
+    if (textError) {
+      res.status(400).json({ success: false, error: textError });
+      return;
+    }
+    if (!isOptionalBoolean(isActive) || !isOptionalBoolean(replyEnabled)) {
+      res.status(400).json({ success: false, error: 'isActive and replyEnabled must be booleans' });
+      return;
+    }
 
     const alias = await prisma.alias.findUnique({
       where: { managementToken: token },
@@ -354,25 +470,24 @@ export async function updateAliasByToken(req: Request, res: Response): Promise<v
       return;
     }
 
-    // Track disabledAt for auto-deletion scheduling
-    let disabledAt: Date | null | undefined = undefined;
-    if (isActive !== undefined) {
-      if (isActive === false && alias.isActive === true) {
-        // Being disabled - set disabledAt
-        disabledAt = new Date();
-      } else if (isActive === true && alias.isActive === false) {
-        // Being re-enabled - clear disabledAt
-        disabledAt = null;
-      }
+    if (isActive === true && !alias.emailVerified) {
+      res.status(403).json({
+        success: false,
+        error: 'Please verify the destination email address before activating this alias',
+      });
+      return;
     }
+
+    // Track disabledAt for auto-deletion scheduling
+    const disabledAt = disabledAtTransition(alias.isActive, isActive as boolean | undefined);
 
     const updated = await prisma.alias.update({
       where: { id: alias.id },
       data: {
-        ...(label !== undefined && { label }),
-        ...(description !== undefined && { description }),
-        ...(isActive !== undefined && { isActive }),
-        ...(replyEnabled !== undefined && { replyEnabled }),
+        ...(label !== undefined && { label: (label as string | null) || null }),
+        ...(description !== undefined && { description: (description as string | null) || null }),
+        ...(isActive !== undefined && { isActive: isActive as boolean }),
+        ...(replyEnabled !== undefined && { replyEnabled: replyEnabled as boolean }),
         ...(disabledAt !== undefined && { disabledAt }),
       },
       include: {
@@ -443,23 +558,33 @@ export async function deleteAliasByToken(req: Request, res: Response): Promise<v
 }
 
 /**
- * Block a sender for an alias
+ * Validate a glob-style email pattern (e.g., *@spam.com, spammer@*).
+ * Expects consecutive '*' to already be collapsed.
  */
-/**
- * Validate a glob-style email pattern (e.g., *@spam.com, spammer@*)
- */
-function isValidEmailPattern(pattern: string): boolean {
+export function isValidEmailPattern(pattern: string): boolean {
+  if (pattern.length === 0 || pattern.length > MAX_BLOCK_PATTERN_LENGTH) return false;
   if (!pattern.includes('@')) return false;
   if (!pattern.includes('*') && !pattern.includes('?')) return false;
+  if ((pattern.match(/\*/g) || []).length > MAX_BLOCK_PATTERN_WILDCARDS) return false;
   return /^[a-zA-Z0-9._%+\-*?@]+$/.test(pattern);
 }
 
+/**
+ * Normalize a block pattern: lowercase and collapse runs of '*' into one
+ */
+export function normalizeBlockPattern(pattern: string): string {
+  return pattern.toLowerCase().replace(/\*+/g, '*');
+}
+
+/**
+ * Block a sender for an alias
+ */
 export async function blockSender(req: Request, res: Response): Promise<void> {
   try {
     const token = req.params.token as string;
-    const { email, reason, isPattern } = req.body;
+    const { email: rawEmail, reason, isPattern } = getBody(req);
 
-    if (!email) {
+    if (!rawEmail || typeof rawEmail !== 'string' || rawEmail.length > MAX_BLOCK_PATTERN_LENGTH) {
       res.status(400).json({
         success: false,
         error: 'Please provide an email address or pattern to block',
@@ -467,11 +592,19 @@ export async function blockSender(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    const reasonError = validateOptionalText(reason, 'reason', MAX_REASON_LENGTH);
+    if (reasonError) {
+      res.status(400).json({ success: false, error: reasonError });
+      return;
+    }
+
+    const email = isPattern ? normalizeBlockPattern(rawEmail) : rawEmail.toLowerCase();
+
     if (isPattern) {
       if (!isValidEmailPattern(email)) {
         res.status(400).json({
           success: false,
-          error: 'Invalid pattern. Use * or ? wildcards with a valid email format (e.g., *@spam.com)',
+          error: `Invalid pattern. Use up to ${MAX_BLOCK_PATTERN_WILDCARDS} * or ? wildcards with a valid email format (e.g., *@spam.com)`,
         });
         return;
       }
@@ -499,22 +632,25 @@ export async function blockSender(req: Request, res: Response): Promise<void> {
       where: {
         aliasId_email: {
           aliasId: alias.id,
-          email: email.toLowerCase(),
+          email,
         },
       },
       create: {
         aliasId: alias.id,
-        email: email.toLowerCase(),
+        email,
         isPattern: !!isPattern,
-        reason: reason || null,
+        reason: (reason as string | null | undefined) || null,
       },
       update: {
         isPattern: !!isPattern,
-        reason: reason || null,
+        reason: (reason as string | null | undefined) || null,
       },
     });
 
-    logger.info(`Sender blocked for ${alias.fullAddress}: ${email}`);
+    // Blocked senders are part of the cached alias record used by the mail path
+    await invalidateAliasCache(alias.fullAddress);
+
+    logger.info(`Sender blocked for ${alias.fullAddress}`);
 
     res.json({
       success: true,
@@ -554,6 +690,8 @@ export async function unblockSender(req: Request, res: Response): Promise<void> 
       where: { id: senderId, aliasId: alias.id },
     });
 
+    await invalidateAliasCache(alias.fullAddress);
+
     res.json({
       success: true,
       message: 'Sender unblocked successfully',
@@ -577,17 +715,58 @@ export async function unblockSender(req: Request, res: Response): Promise<void> 
 export async function createPrivateAlias(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
-    const { destinationEmail, domainId, customAlias, label, description, expiresIn }: CreatePublicAliasInput = req.body;
+    const { destinationEmail, domainId, customAlias, label, description, expiresIn } = getBody(req);
+
+    if (destinationEmail !== undefined && destinationEmail !== null && destinationEmail !== '') {
+      if (!isValidEmail(destinationEmail)) {
+        res.status(400).json({
+          success: false,
+          error: 'Please provide a valid destination email address',
+        });
+        return;
+      }
+      if (BLOCK_DISPOSABLE && isDisposableEmail(destinationEmail)) {
+        res.status(400).json({
+          success: false,
+          error: 'Disposable email addresses are not allowed',
+        });
+        return;
+      }
+    }
+
+    if (domainId !== undefined && domainId !== null && typeof domainId !== 'string') {
+      res.status(400).json({ success: false, error: 'Invalid domain selected' });
+      return;
+    }
+
+    if (customAlias !== undefined && customAlias !== null && typeof customAlias !== 'string') {
+      res.status(400).json({ success: false, error: 'Invalid alias format' });
+      return;
+    }
+
+    const textError = validateLabelAndDescription(label, description);
+    if (textError) {
+      res.status(400).json({ success: false, error: textError });
+      return;
+    }
+
+    const expiry = parseExpiresInDays(expiresIn);
+    if (!expiry.valid) {
+      res.status(400).json({ success: false, error: EXPIRES_IN_ERROR });
+      return;
+    }
 
     // Get user with their limits
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         email: true,
+        emailHash: true,
         emailIv: true,
         emailSalt: true,
         emailAuthTag: true,
         isEmailEncrypted: true,
+        emailVerified: true,
         maxAliases: true,
       },
     });
@@ -611,7 +790,7 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
       };
       fallbackEmail = decryptEmail(encryptedData, userId);
     }
-    const email = (destinationEmail || fallbackEmail).toLowerCase();
+    const email = ((destinationEmail as string) || fallbackEmail).toLowerCase();
 
     // Check alias limit
     const aliasCount = await prisma.alias.count({
@@ -626,8 +805,10 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
       return;
     }
 
-    // Get domain
-    let domain = domainId ? await getDomainById(domainId) : await getDefaultDomain();
+    // Get domain (private aliases may use any active domain)
+    const domain = domainId
+      ? await getDomainById(domainId as string, { activeOnly: true })
+      : await getDefaultDomain();
     if (!domain) {
       res.status(400).json({
         success: false,
@@ -651,7 +832,7 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
       if (!isValidCustomAlias(customAlias)) {
         res.status(400).json({
           success: false,
-          error: 'Invalid alias format',
+          error: 'Invalid or reserved alias format',
         });
         return;
       }
@@ -699,6 +880,11 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
     const encryptedData = encryptEmail(email, aliasId);
     const emailHash = hashEmail(email);
 
+    // Only skip verification when forwarding to the account's own, already
+    // verified address. Any other destination must be verified by its owner.
+    const ownsDestination = !!user.emailVerified && !!user.emailHash && user.emailHash === emailHash;
+    const verified = !REQUIRE_VERIFICATION || ownsDestination;
+
     const newAlias = await prisma.alias.create({
       data: {
         id: aliasId,
@@ -711,15 +897,15 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
         destinationAuthTag: encryptedData.authTag,
         destinationHash: emailHash,
         isEncrypted: true,
-        emailVerified: true, // Authenticated users are verified
-        label: label || null,
-        description: description || null,
-        isActive: true,
+        emailVerified: verified,
+        label: (label as string | null | undefined) || null,
+        description: (description as string | null | undefined) || null,
+        isActive: verified,
         isPrivate: true,
         userId,
         replyPrefix,
         replyEnabled: false,
-        expiresAt: expiresIn ? calculateExpiresAt(expiresIn) : null,
+        expiresAt: expiry.days ? calculateExpiresAt(expiry.days) : null,
       },
       include: {
         domain: { select: { id: true, domain: true } },
@@ -732,7 +918,13 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
       data: { aliasCount: { increment: 1 } },
     });
 
-    logger.info(`Private alias created: ${fullAddress} for user ${req.user!.email}`);
+    await invalidateAliasCache(fullAddress);
+
+    if (!verified) {
+      await sendAliasVerificationEmail(email, fullAddress, newAlias.id);
+    }
+
+    logger.info(`Private alias created: ${fullAddress} for user ${userId}`);
 
     const safeAlias = decryptAliasForResponse(newAlias);
     // Override with the known plaintext email (we have it from the request)
@@ -740,7 +932,9 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
     res.status(201).json({
       success: true,
       data: safeAlias,
-      message: 'Alias created successfully',
+      message: verified
+        ? 'Alias created successfully'
+        : 'Alias created. Verify the destination email address to activate it.',
     });
   } catch (error) {
     logger.error('Create private alias error:', error);
@@ -757,27 +951,24 @@ export async function createPrivateAlias(req: AuthenticatedRequest, res: Respons
 export async function getAliases(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
-    const {
-      page = 1,
-      limit = 20,
-      sortBy = 'createdAt',
-      sortOrder = 'desc',
-      active,
-    } = req.query;
+    const { sortBy, sortOrder, active } = req.query;
+    const { page, limit, skip } = parsePagination(req.query.page, req.query.limit, 20, 100);
 
-    const skip = (Number(page) - 1) * Number(limit);
-    const where: any = { userId };
+    const sortField = typeof sortBy === 'string' && ALIAS_SORT_FIELDS.has(sortBy) ? sortBy : 'createdAt';
+    const sortDirection: 'asc' | 'desc' = sortOrder === 'asc' ? 'asc' : 'desc';
 
-    if (active !== undefined) {
+    const where: { userId: string; isActive?: boolean } = { userId };
+
+    if (typeof active === 'string') {
       where.isActive = active === 'true';
     }
 
     const [aliases, total] = await Promise.all([
       prisma.alias.findMany({
         where,
-        orderBy: { [sortBy as string]: sortOrder },
+        orderBy: { [sortField]: sortDirection },
         skip,
-        take: Number(limit),
+        take: limit,
         include: {
           domain: { select: { id: true, domain: true } },
         },
@@ -785,19 +976,19 @@ export async function getAliases(req: AuthenticatedRequest, res: Response): Prom
       prisma.alias.count({ where }),
     ]);
 
-    const totalPages = Math.ceil(total / Number(limit));
+    const totalPages = Math.ceil(total / limit);
 
     res.json({
       success: true,
       data: {
         items: aliases.map(decryptAliasForResponse),
         pagination: {
-          page: Number(page),
-          limit: Number(limit),
+          page,
+          limit,
           total,
           totalPages,
-          hasNext: Number(page) < totalPages,
-          hasPrev: Number(page) > 1,
+          hasNext: page < totalPages,
+          hasPrev: page > 1,
         },
       },
     });
@@ -858,7 +1049,34 @@ export async function updateAlias(req: AuthenticatedRequest, res: Response): Pro
   try {
     const userId = req.user!.id;
     const id = req.params.id as string;
-    const { label, description, isActive, replyEnabled, expiresAt }: UpdateAliasInput = req.body;
+    const { label, description, isActive, replyEnabled, expiresAt } = getBody(req);
+
+    const textError = validateLabelAndDescription(label, description);
+    if (textError) {
+      res.status(400).json({ success: false, error: textError });
+      return;
+    }
+    if (!isOptionalBoolean(isActive) || !isOptionalBoolean(replyEnabled)) {
+      res.status(400).json({ success: false, error: 'isActive and replyEnabled must be booleans' });
+      return;
+    }
+
+    // expiresAt: null clears it; otherwise a date in the future within the max window
+    let parsedExpiresAt: Date | null | undefined = undefined;
+    if (expiresAt === null) {
+      parsedExpiresAt = null;
+    } else if (expiresAt !== undefined) {
+      const date = typeof expiresAt === 'string' ? new Date(expiresAt) : null;
+      const maxDate = calculateExpiresAt(MAX_EXPIRES_IN_DAYS + 1);
+      if (!date || isNaN(date.getTime()) || date.getTime() <= Date.now() || date > maxDate) {
+        res.status(400).json({
+          success: false,
+          error: `expiresAt must be null or an ISO date within ${MAX_EXPIRES_IN_DAYS} days`,
+        });
+        return;
+      }
+      parsedExpiresAt = date;
+    }
 
     const existing = await prisma.alias.findFirst({
       where: { id, userId },
@@ -872,14 +1090,25 @@ export async function updateAlias(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
+    if (isActive === true && !existing.emailVerified) {
+      res.status(403).json({
+        success: false,
+        error: 'Please verify the destination email address before activating this alias',
+      });
+      return;
+    }
+
+    const disabledAt = disabledAtTransition(existing.isActive, isActive as boolean | undefined);
+
     const updated = await prisma.alias.update({
       where: { id },
       data: {
-        ...(label !== undefined && { label }),
-        ...(description !== undefined && { description }),
-        ...(isActive !== undefined && { isActive }),
-        ...(replyEnabled !== undefined && { replyEnabled }),
-        ...(expiresAt !== undefined && { expiresAt }),
+        ...(label !== undefined && { label: (label as string | null) || null }),
+        ...(description !== undefined && { description: (description as string | null) || null }),
+        ...(isActive !== undefined && { isActive: isActive as boolean }),
+        ...(replyEnabled !== undefined && { replyEnabled: replyEnabled as boolean }),
+        ...(parsedExpiresAt !== undefined && { expiresAt: parsedExpiresAt }),
+        ...(disabledAt !== undefined && { disabledAt }),
       },
       include: {
         domain: { select: { id: true, domain: true } },
@@ -968,9 +1197,22 @@ export async function toggleAlias(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
+    const nextActive = !existing.isActive;
+
+    if (nextActive && !existing.emailVerified) {
+      res.status(403).json({
+        success: false,
+        error: 'Please verify the destination email address before activating this alias',
+      });
+      return;
+    }
+
     const updated = await prisma.alias.update({
       where: { id },
-      data: { isActive: !existing.isActive },
+      data: {
+        isActive: nextActive,
+        disabledAt: nextActive ? null : new Date(),
+      },
       include: {
         domain: { select: { id: true, domain: true } },
       },
@@ -1052,20 +1294,25 @@ export async function getStats(req: AuthenticatedRequest, res: Response): Promis
 export async function getEmailLogs(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
-    const { page = 1, limit = 20, aliasId, status } = req.query;
+    const { aliasId, status } = req.query;
+    const { page, limit, skip } = parsePagination(req.query.page, req.query.limit, 20, 100);
 
-    const skip = (Number(page) - 1) * Number(limit);
-    const where: any = { userId };
+    if ((aliasId !== undefined && typeof aliasId !== 'string') || (status !== undefined && typeof status !== 'string')) {
+      res.status(400).json({ success: false, error: 'Invalid filter parameters' });
+      return;
+    }
 
-    if (aliasId) where.aliasId = aliasId;
-    if (status) where.status = status;
+    const where: { userId: string; aliasId?: string; status?: string } = { userId };
+
+    if (aliasId) where.aliasId = aliasId as string;
+    if (status) where.status = status as string;
 
     const [logs, total] = await Promise.all([
       prisma.emailLog.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
-        take: Number(limit),
+        take: limit,
         include: {
           alias: {
             select: { alias: true, fullAddress: true, label: true },
@@ -1080,10 +1327,10 @@ export async function getEmailLogs(req: AuthenticatedRequest, res: Response): Pr
       data: {
         items: logs,
         pagination: {
-          page: Number(page),
-          limit: Number(limit),
+          page,
+          limit,
           total,
-          totalPages: Math.ceil(total / Number(limit)),
+          totalPages: Math.ceil(total / limit),
         },
       },
     });

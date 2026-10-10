@@ -11,8 +11,10 @@ import logger from './utils/logger';
 
 const app = express();
 
-// Trust proxy - required for correct client IP detection behind reverse proxy (Caddy/nginx)
-app.set('trust proxy', 1);
+// Trust proxy - only trust X-Forwarded-For from loopback / private-network hops
+// (Caddy reaches us over the docker bridge or 127.0.0.1). A public client cannot
+// spoof its IP by sending its own X-Forwarded-For header.
+app.set('trust proxy', 'loopback, uniquelocal');
 
 // Security middleware
 app.use(helmet());
@@ -32,13 +34,15 @@ const limiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  // Only API traffic counts; static assets / SPA shell are not limited
+  skip: (req) => !req.path.startsWith('/api/'),
 });
 
 app.use(limiter);
 
 // Body parsing
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
 // Request logging
 app.use((req, res, next) => {
@@ -50,17 +54,19 @@ app.use((req, res, next) => {
   next();
 });
 
-// Swagger API documentation
-app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customCss: '.swagger-ui .topbar { display: none }',
-  customSiteTitle: 'MakeAnon API Documentation',
-}));
+// Swagger API documentation (set ENABLE_API_DOCS=false to disable)
+if (process.env.ENABLE_API_DOCS !== 'false') {
+  app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'MakeAnon API Documentation',
+  }));
 
-// Serve OpenAPI spec as JSON
-app.get('/api/docs.json', (_req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.send(swaggerSpec);
-});
+  // Serve OpenAPI spec as JSON
+  app.get('/api/docs.json', (_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.send(swaggerSpec);
+  });
+}
 
 // API routes
 app.use('/api/v1', routes);

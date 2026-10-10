@@ -10,6 +10,7 @@ import { connectRedis, disconnectRedis } from './services/redis';
 import { initializeDomainsFromEnv } from './services/domainService';
 import { verifyEncryptionSetup } from './utils/encryption';
 import prisma from './services/database';
+import { deleteAliasesWhere } from './services/aliasCleanup';
 import logger from './utils/logger';
 
 const PORT = parseInt(process.env.PORT || '3000');
@@ -90,36 +91,34 @@ async function main() {
         });
 
         // Clean expired aliases if configured
+        // (the mail path refuses expired aliases regardless)
         if (process.env.DELETE_EXPIRED_ALIASES === 'true') {
-          await prisma.alias.deleteMany({
-            where: { expiresAt: { lt: new Date() } },
-          });
+          const deletedExpired = await deleteAliasesWhere({ expiresAt: { lt: new Date() } });
+          if (deletedExpired > 0) {
+            logger.info(`Deleted ${deletedExpired} expired aliases`);
+          }
         }
 
         // Delete unverified aliases after 72 hours
         const unverifiedCutoff = new Date();
         unverifiedCutoff.setHours(unverifiedCutoff.getHours() - 72);
-        const deletedUnverified = await prisma.alias.deleteMany({
-          where: {
-            emailVerified: false,
-            createdAt: { lt: unverifiedCutoff },
-          },
+        const deletedUnverified = await deleteAliasesWhere({
+          emailVerified: false,
+          createdAt: { lt: unverifiedCutoff },
         });
-        if (deletedUnverified.count > 0) {
-          logger.info(`Deleted ${deletedUnverified.count} unverified aliases (72H expiry)`);
+        if (deletedUnverified > 0) {
+          logger.info(`Deleted ${deletedUnverified} unverified aliases (72H expiry)`);
         }
 
         // Delete disabled aliases after 30 days
         const disabledCutoff = new Date();
         disabledCutoff.setDate(disabledCutoff.getDate() - 30);
-        const deletedDisabled = await prisma.alias.deleteMany({
-          where: {
-            isActive: false,
-            disabledAt: { lt: disabledCutoff },
-          },
+        const deletedDisabled = await deleteAliasesWhere({
+          isActive: false,
+          disabledAt: { lt: disabledCutoff },
         });
-        if (deletedDisabled.count > 0) {
-          logger.info(`Deleted ${deletedDisabled.count} disabled aliases (30D expiry)`);
+        if (deletedDisabled > 0) {
+          logger.info(`Deleted ${deletedDisabled} disabled aliases (30D expiry)`);
         }
 
         // Clean old logs if configured

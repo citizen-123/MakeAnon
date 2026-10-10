@@ -118,30 +118,8 @@ describe('Auth Controller', () => {
         expect(hashedPassword).not.toContain(password);
       });
 
-      it('should make first user an admin', async () => {
-        mockResolve(prisma.user.count,0);
-
-        const isFirstUser = await prisma.user.count({}) === 0;
-        expect(isFirstUser).toBe(true);
-
-        // First user should be admin
-        const userData = {
-          isAdmin: isFirstUser
-        };
-        expect(userData.isAdmin).toBe(true);
-      });
-
-      it('should not make subsequent users admin', async () => {
-        mockResolve(prisma.user.count,1);
-
-        const isFirstUser = await prisma.user.count({}) === 0;
-        expect(isFirstUser).toBe(false);
-
-        const userData = {
-          isAdmin: isFirstUser
-        };
-        expect(userData.isAdmin).toBe(false);
-      });
+      // Admin is never granted at signup (not even to the first user);
+      // see authRoutes.test.ts for the behavioural test.
     });
 
     describe('Duplicate Email Prevention', () => {
@@ -384,7 +362,7 @@ describe('Auth Controller', () => {
 });
 
 describe('Authentication Middleware', () => {
-  const JWT_SECRET = 'test-jwt-secret-key-for-testing-only-32chars';
+  const _JWT_SECRET = 'test-jwt-secret-key-for-testing-only-32chars';
 
   describe('Token Extraction', () => {
     it('should extract Bearer token from Authorization header', () => {

@@ -40,7 +40,6 @@ router.get('/health', async (_req, res) => {
       redis: redisHealthy,
     },
     timestamp: new Date().toISOString(),
-    version: process.env.npm_package_version || '2.1.1',
   });
 });
 
@@ -54,10 +53,9 @@ router.get('/stats', async (_req, res) => {
       return;
     }
 
-    const [totalAliases, activeAliases, totalUsers, domainsCount, forwardedResult] = await Promise.all([
+    const [totalAliases, activeAliases, domainsCount, forwardedResult] = await Promise.all([
       prisma.alias.count(),
       prisma.alias.count({ where: { isActive: true } }),
-      prisma.user.count(),
       prisma.domain.count({ where: { isActive: true } }),
       prisma.alias.aggregate({ _sum: { forwardCount: true } }),
     ]);
@@ -65,7 +63,6 @@ router.get('/stats', async (_req, res) => {
     const stats = {
       totalAliases,
       activeAliases,
-      totalUsers,
       domainsCount,
       totalEmailsForwarded: forwardedResult._sum.forwardCount || 0,
     };
@@ -73,7 +70,7 @@ router.get('/stats', async (_req, res) => {
     await cacheStats(stats);
 
     res.json({ success: true, data: stats });
-  } catch (error) {
+  } catch {
     res.status(500).json({ success: false, error: 'Failed to get statistics' });
   }
 });

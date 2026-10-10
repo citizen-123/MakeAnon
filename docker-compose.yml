@@ -9,7 +9,7 @@ services:
     container_name: makeanon-app
     restart: unless-stopped
     ports:
-      - "3000:3000"   # HTTP API
+      - "127.0.0.1:3000:3000"   # HTTP API (localhost only; public traffic goes through Caddy)
       - "25:25"       # SMTP inbound (requires CAP_NET_BIND_SERVICE)
     environment:
       - NODE_ENV=production
@@ -38,6 +38,13 @@ services:
       - ALIAS_CREATION_LIMIT_PER_HOUR=${ALIAS_CREATION_LIMIT_PER_HOUR:-10}
       - FORWARD_LIMIT_PER_MINUTE=${FORWARD_LIMIT_PER_MINUTE:-30}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-true}
+      # Inbound STARTTLS cert (synced from Caddy's Let's Encrypt cert by certsync)
+      - SMTP_TLS_ENABLED=true
+      - SMTP_TLS_KEY_PATH=/certs/makeanon.info.key
+      - SMTP_TLS_CERT_PATH=/certs/makeanon.info.crt
+    volumes:
+      - smtp_certs:/certs:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,6 +124,34 @@ services:
       retries: 3
       start_period: 10s
 
+  # Copies Caddy's Let's Encrypt cert for the MX host into a volume the
+  # non-root app user can read, so inbound SMTP STARTTLS uses a valid cert.
+  certsync:
+    image: alpine:3.20
+    container_name: makeanon-certsync
+    restart: unless-stopped
+    environment:
+      - CERT_DOMAIN=${DOMAIN:-makeanon.info}
+    volumes:
+      - caddy_data:/caddy:ro
+      - smtp_certs:/certs
+    command:
+      - /bin/sh
+      - -c
+      - |
+        src=/caddy/caddy/certificates/acme-v02.api.letsencrypt.org-directory/$$CERT_DOMAIN
+        while true; do
+          if [ -f "$$src/$$CERT_DOMAIN.crt" ] && [ -f "$$src/$$CERT_DOMAIN.key" ]; then
+            install -m 644 -o 1001 -g 1001 "$$src/$$CERT_DOMAIN.crt" /certs/makeanon.info.crt
+            install -m 600 -o 1001 -g 1001 "$$src/$$CERT_DOMAIN.key" /certs/makeanon.info.key
+          else
+            echo "certsync: cert for $$CERT_DOMAIN not found yet"
+          fi
+          sleep 21600
+        done
+    networks:
+      - makeanon-network
+
   # Caddy reverse proxy with automatic HTTPS
   caddy:
     image: caddy:2-alpine
@@ -148,6 +183,8 @@ volumes:
   caddy_config:
     driver: local
   haraka_queue:
+    driver: local
+  smtp_certs:
     driver: local
 
 networks:

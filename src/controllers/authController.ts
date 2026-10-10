@@ -6,9 +6,16 @@ import { generateToken } from '../middleware/auth';
 import { AuthenticatedRequest } from '../types';
 import { isValidEmail } from '../utils/helpers';
 import { encryptEmail, decryptEmail, hashEmail, EncryptedData } from '../utils/encryption';
+import { invalidateAliasCache } from '../services/redis';
 import logger from '../utils/logger';
 
 const SALT_ROUNDS = 12;
+
+const INVALID_CREDENTIALS = 'Invalid email or password';
+
+// Valid cost-12 bcrypt hash of a random throwaway string. Compared against when
+// the account does not exist so that login timing does not leak existence.
+const DUMMY_PASSWORD_HASH = '$2b$12$3GK5L0rOlmTnO.iWgbJ5ieUPuluwW946DWpgjIasUKIDJHmv/Ycse';
 
 /**
  * Encrypt a user's email for database storage
@@ -50,7 +57,13 @@ function decryptUserEmail(user: {
 
 /**
  * Sign up for an account
- * Password is optional - only required for private alias management
+ *
+ * Existing emails get a 409. We deliberately keep that (rather than a generic
+ * "check your email" response) because signup issues a session token directly
+ * and there is no email-confirmation flow to fall back on; enumeration via this
+ * endpoint is mitigated by a strict per-IP rate limit (see authRoutes).
+ *
+ * Admin rights are never granted here. Promote admins manually.
  */
 export async function signup(req: Request, res: Response): Promise<void> {
   try {
@@ -64,63 +77,24 @@ export async function signup(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Check if user already exists
+    if (!password || typeof password !== 'string') {
+      res.status(400).json({
+        success: false,
+        error: 'Password is required',
+      });
+      return;
+    }
+
+    // Check if user already exists. Legacy passwordless accounts are NOT
+    // claimable via signup: allowing that let anyone who knew the email set a
+    // password and take over the account.
     const emailHashValue = hashEmail(email);
     const existingUser = await prisma.user.findUnique({
       where: { emailHash: emailHashValue },
+      select: { id: true },
     });
 
     if (existingUser) {
-      // If user exists but has no password and one is being set
-      if (!existingUser.password && password) {
-        const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-        const encryptedFields = encryptUserEmail(email.toLowerCase(), existingUser.id);
-        const user = await prisma.user.update({
-          where: { id: existingUser.id },
-          data: {
-            password: hashedPassword,
-            name: name || existingUser.name,
-            ...encryptedFields,
-          },
-          select: {
-            id: true,
-            email: true,
-            emailIv: true,
-            emailSalt: true,
-            emailAuthTag: true,
-            isEmailEncrypted: true,
-            name: true,
-            isAdmin: true,
-            maxAliases: true,
-            createdAt: true,
-          },
-        });
-
-        const plaintextEmail = decryptUserEmail(user);
-        const token = generateToken({
-          id: user.id,
-          email: plaintextEmail,
-          isAdmin: user.isAdmin,
-        });
-
-        res.json({
-          success: true,
-          data: {
-            user: {
-              id: user.id,
-              email: plaintextEmail,
-              name: user.name,
-              isAdmin: user.isAdmin,
-              maxAliases: user.maxAliases,
-              createdAt: user.createdAt,
-            },
-            token,
-          },
-          message: 'Password set successfully. You can now manage private aliases.',
-        });
-        return;
-      }
-
       res.status(409).json({
         success: false,
         error: 'An account with this email already exists',
@@ -128,24 +102,19 @@ export async function signup(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Hash password if provided
-    const hashedPassword = password ? await bcrypt.hash(password, SALT_ROUNDS) : null;
-
-    // Check if this should be an admin (first user or configured admin)
-    const isFirstUser = (await prisma.user.count()) === 0;
-    const isConfiguredAdmin = email.toLowerCase() === process.env.ADMIN_EMAIL?.toLowerCase();
+    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
     const tempId = crypto.randomUUID();
     const encryptedFields = encryptUserEmail(email.toLowerCase(), tempId);
 
-    // Create user
+    // Create user (never admin; see function doc)
     const user = await prisma.user.create({
       data: {
         id: tempId,
         ...encryptedFields,
         password: hashedPassword,
         name: name || null,
-        isAdmin: isFirstUser || isConfiguredAdmin,
+        isAdmin: false,
       },
       select: {
         id: true,
@@ -157,20 +126,16 @@ export async function signup(req: Request, res: Response): Promise<void> {
         name: true,
         isAdmin: true,
         maxAliases: true,
+        tokenVersion: true,
         createdAt: true,
       },
     });
 
     const plaintextEmail = decryptUserEmail(user);
 
-    // Generate token
-    const token = generateToken({
-      id: user.id,
-      email: plaintextEmail,
-      isAdmin: user.isAdmin,
-    });
+    const token = generateToken({ id: user.id, tokenVersion: user.tokenVersion });
 
-    logger.info(`New user registered: [encrypted]${user.isAdmin ? ' (admin)' : ''}`);
+    logger.info('New user registered: [encrypted]');
 
     res.status(201).json({
       success: true,
@@ -185,9 +150,7 @@ export async function signup(req: Request, res: Response): Promise<void> {
         },
         token,
       },
-      message: password
-        ? 'Account created successfully'
-        : 'Account created. Set a password to manage private aliases.',
+      message: 'Account created successfully',
     });
   } catch (error) {
     logger.error('Signup error:', error);
@@ -200,12 +163,16 @@ export async function signup(req: Request, res: Response): Promise<void> {
 
 /**
  * Log in to an account
+ *
+ * Every failure mode (unknown email, deactivated, no password, wrong password)
+ * returns the same 401 and performs one bcrypt comparison, so responses do not
+ * reveal whether an account exists.
  */
 export async function login(req: Request, res: Response): Promise<void> {
   try {
     const { email, password } = req.body;
 
-    if (!email) {
+    if (!email || typeof email !== 'string') {
       res.status(400).json({
         success: false,
         error: 'Email is required',
@@ -213,57 +180,29 @@ export async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Find user
+    const suppliedPassword = typeof password === 'string' ? password : '';
+
     const user = await prisma.user.findUnique({
       where: { emailHash: hashEmail(email) },
     });
 
-    if (!user) {
+    // Always run exactly one bcrypt compare to equalise timing
+    const hashToCompare = user?.password || DUMMY_PASSWORD_HASH;
+    const passwordMatches = await bcrypt.compare(suppliedPassword, hashToCompare);
+
+    if (!user || !user.password || !user.isActive || !passwordMatches) {
       res.status(401).json({
         success: false,
-        error: 'Invalid email or password',
-      });
-      return;
-    }
-
-    if (!user.isActive) {
-      res.status(401).json({
-        success: false,
-        error: 'Account is deactivated',
-      });
-      return;
-    }
-
-    // Check if user has a password set
-    if (!user.password) {
-      res.status(401).json({
-        success: false,
-        error: 'No password set for this account. Please sign up with a password first.',
-      });
-      return;
-    }
-
-    // Verify password
-    const isValidPassword = await bcrypt.compare(password, user.password);
-
-    if (!isValidPassword) {
-      res.status(401).json({
-        success: false,
-        error: 'Invalid email or password',
+        error: INVALID_CREDENTIALS,
       });
       return;
     }
 
     const plaintextEmail = decryptUserEmail(user);
 
-    // Generate token
-    const token = generateToken({
-      id: user.id,
-      email: plaintextEmail,
-      isAdmin: user.isAdmin,
-    });
+    const token = generateToken({ id: user.id, tokenVersion: user.tokenVersion });
 
-    logger.info(`User logged in: [encrypted]`);
+    logger.info('User logged in: [encrypted]');
 
     res.json({
       success: true,
@@ -445,16 +384,24 @@ export async function changePassword(req: AuthenticatedRequest, res: Response): 
     // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, SALT_ROUNDS);
 
-    // Update password
-    await prisma.user.update({
+    // Update password and bump tokenVersion so every previously issued JWT is revoked
+    const updated = await prisma.user.update({
       where: { id: userId },
-      data: { password: hashedPassword },
+      data: {
+        password: hashedPassword,
+        tokenVersion: { increment: 1 },
+      },
+      select: { id: true, tokenVersion: true },
     });
 
     logger.info(`Password ${user.password ? 'changed' : 'set'} for user: [encrypted]`);
 
+    // Issue a fresh token so the current session keeps working
+    const token = generateToken({ id: updated.id, tokenVersion: updated.tokenVersion });
+
     res.json({
       success: true,
+      data: { token },
       message: user.password ? 'Password changed successfully' : 'Password set successfully',
     });
   } catch (error) {
@@ -516,12 +463,45 @@ export async function deleteAccount(req: AuthenticatedRequest, res: Response): P
       }
     }
 
-    // Delete user (cascades to aliases via Prisma)
-    await prisma.user.delete({
-      where: { id: userId },
+    // Delete the user's aliases explicitly (the FK also cascades, but doing it here
+    // lets us keep Domain.aliasCount accurate), then the user, atomically.
+    const deletedAliases = await prisma.$transaction(async (tx) => {
+      const aliases = await tx.alias.findMany({
+        where: { userId },
+        select: { id: true, fullAddress: true, domainId: true },
+      });
+
+      if (aliases.length > 0) {
+        await tx.alias.deleteMany({ where: { userId } });
+
+        const perDomain = new Map<string, number>();
+        for (const alias of aliases) {
+          perDomain.set(alias.domainId, (perDomain.get(alias.domainId) || 0) + 1);
+        }
+        for (const [domainId, count] of perDomain) {
+          await tx.domain.update({
+            where: { id: domainId },
+            data: { aliasCount: { decrement: count } },
+          });
+        }
+      }
+
+      await tx.user.delete({ where: { id: userId } });
+
+      return aliases;
     });
 
-    logger.info(`Account deleted: [encrypted]`);
+    // Drop cached alias lookups so the SMTP server stops forwarding immediately.
+    // Done after commit; a cache failure must not undo the deletion.
+    await Promise.all(
+      deletedAliases.map((alias) =>
+        invalidateAliasCache(alias.fullAddress).catch((err) => {
+          logger.warn('Failed to invalidate alias cache after account deletion:', err);
+        })
+      )
+    );
+
+    logger.info(`Account deleted: [encrypted] (${deletedAliases.length} aliases removed)`);
 
     res.json({
       success: true,

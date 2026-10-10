@@ -446,8 +446,8 @@ sed '/^-/d' haraka/config/dkim/yourdomain.com/public | tr -d '\n'
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JWT_EXPIRES_IN` | `7d` | JWT token expiry |
-| `ADMIN_EMAIL` | `admin@yourdomain.com` | Default admin account email |
-| `ADMIN_PASSWORD` | — | Default admin account password |
+| `ENABLE_API_DOCS` | `true` | Serve Swagger UI at `/api/docs` |
+| `SMTP_MAX_CLIENTS` | `50` | Max concurrent inbound SMTP connections |
 
 ### Rate Limiting
 

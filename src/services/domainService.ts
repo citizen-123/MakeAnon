@@ -34,10 +34,23 @@ export async function getActiveDomains(): Promise<DomainInfo[]> {
   }
 }
 
+export interface DomainLookupOptions {
+  /** Only return the domain if it is active */
+  activeOnly?: boolean;
+  /** Only return the domain if it is public */
+  publicOnly?: boolean;
+}
+
 /**
- * Get domain by ID
+ * Get domain by ID.
+ * Pass { activeOnly, publicOnly } to restrict which domains are visible/usable
+ * (e.g. public alias creation must only accept active, public domains).
  */
-export async function getDomainById(id: string): Promise<DomainInfo | null> {
+export async function getDomainById(
+  id: string,
+  options: DomainLookupOptions = {}
+): Promise<DomainInfo | null> {
+  if (typeof id !== 'string' || id.length === 0) return null;
   try {
     const domain = await prisma.domain.findUnique({
       where: { id },
@@ -47,9 +60,15 @@ export async function getDomainById(id: string): Promise<DomainInfo | null> {
         description: true,
         isDefault: true,
         aliasCount: true,
+        isActive: true,
+        isPublic: true,
       },
     });
-    return domain;
+    if (!domain) return null;
+    if (options.activeOnly && domain.isActive !== true) return null;
+    if (options.publicOnly && domain.isPublic !== true) return null;
+    const { isActive: _isActive, isPublic: _isPublic, ...info } = domain;
+    return info;
   } catch (error) {
     logger.error('Failed to get domain by ID:', error);
     return null;

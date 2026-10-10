@@ -7,8 +7,8 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 
 // Mock nodemailer before imports
-const mockSendMail = jest.fn<any>().mockResolvedValue({ messageId: 'test-message-id' });
-const mockVerify = jest.fn<any>().mockResolvedValue(true);
+const mockSendMail = jest.fn<(...args: any[]) => any>().mockResolvedValue({ messageId: 'test-message-id' });
+const mockVerify = jest.fn<(...args: any[]) => any>().mockResolvedValue(true);
 const mockTransporter = {
   sendMail: mockSendMail,
   verify: mockVerify

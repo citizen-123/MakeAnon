@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
+import type { SendMailOptions, Transporter } from 'nodemailer';
 import { ForwardResult, EmailMessage } from '../types';
-import { getDefaultDomain, createFullAliasEmail } from '../utils/helpers';
 import logger from '../utils/logger';
 
 // Create reusable transporter
@@ -23,12 +23,30 @@ const createTransporter = () => {
   });
 };
 
-let transporter: nodemailer.Transporter | null = null;
+let transporter: Transporter | null = null;
+
+const MAX_ERROR_LENGTH = 500;
+const EMAIL_ADDRESS_PATTERN = /[^\s<>()[\]{}"',;:@]+@[^\s<>()[\]{}"',;:@]+/g;
+
+/**
+ * Redact anything that looks like an email address from a string (e.g. SMTP
+ * error messages that echo the recipient) so it is safe to log or persist.
+ */
+export function scrubEmailAddresses(text: string): string {
+  return text.substring(0, MAX_ERROR_LENGTH).replace(EMAIL_ADDRESS_PATTERN, '[redacted]');
+}
+
+/**
+ * Extract a scrubbed error message from an unknown thrown value
+ */
+function safeErrorMessage(error: unknown): string {
+  return scrubEmailAddresses(error instanceof Error ? error.message : 'Unknown error');
+}
 
 /**
  * Get or create the email transporter
  */
-function getTransporter(): nodemailer.Transporter {
+function getTransporter(): Transporter {
   if (!transporter) {
     transporter = createTransporter();
   }
@@ -105,7 +123,7 @@ Subject: ${originalMessage.subject || '(no subject)'}
 <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;"/>
 `;
 
-    const mailOptions: nodemailer.SendMailOptions = {
+    const mailOptions: SendMailOptions = {
       from: getFromAddress(),
       to: realEmail,
       subject: forwardedSubject,
@@ -119,7 +137,7 @@ Subject: ${originalMessage.subject || '(no subject)'}
     const result = await transport.sendMail(mailOptions);
     const processingTime = Date.now() - startTime;
 
-    logger.info(`Email forwarded successfully: ${aliasAddress} -> ${realEmail} (${processingTime}ms)`);
+    logger.debug(`Email sent via ${aliasAddress} (${processingTime}ms)`);
 
     return {
       success: true,
@@ -127,8 +145,8 @@ Subject: ${originalMessage.subject || '(no subject)'}
       processingTime,
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    logger.error(`Failed to forward email: ${errorMessage}`);
+    // Not logged here: the caller logs the failure once, with alias context.
+    const errorMessage = safeErrorMessage(error);
 
     return {
       success: false,
@@ -152,7 +170,7 @@ export async function sendReplyEmail(
     const transport = getTransporter();
 
     // Send from the alias address to the original sender
-    const mailOptions: nodemailer.SendMailOptions = {
+    const mailOptions: SendMailOptions = {
       from: aliasAddress,
       to: originalSender,
       subject,
@@ -162,14 +180,14 @@ export async function sendReplyEmail(
 
     const result = await transport.sendMail(mailOptions);
 
-    logger.info(`Reply sent: ${aliasAddress} -> ${originalSender}`);
+    logger.info(`Reply sent via ${aliasAddress}`);
 
     return {
       success: true,
       messageId: result.messageId,
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorMessage = safeErrorMessage(error);
     logger.error(`Failed to send reply: ${errorMessage}`);
 
     return {
@@ -204,7 +222,7 @@ export async function sendNotification(
       messageId: result.messageId,
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorMessage = safeErrorMessage(error);
     logger.error(`Failed to send notification: ${errorMessage}`);
 
     return {
@@ -233,4 +251,5 @@ export default {
   forwardEmail,
   sendReplyEmail,
   sendNotification,
+  scrubEmailAddresses,
 };

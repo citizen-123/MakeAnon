@@ -44,6 +44,7 @@ model User {
   isActive      Boolean  @default(true)
   isAdmin       Boolean  @default(false)
   emailVerified Boolean  @default(false)
+  tokenVersion  Int      @default(0) // Bumped on password change/logout-all to revoke JWTs
 
   // Limits
   maxAliases    Int      @default(100)
@@ -123,7 +124,7 @@ model Alias {
 
   // Optional owner (for private aliases)
   userId        String?
-  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user          User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

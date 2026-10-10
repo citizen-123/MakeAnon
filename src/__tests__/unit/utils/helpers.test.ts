@@ -24,6 +24,9 @@ import {
   getBaseUrl,
   createManagementUrl,
   createVerificationUrl,
+  parseExpiresInDays,
+  parsePagination,
+  validateOptionalText,
   calculateExpiresAt,
   isExpired,
   formatDate,
@@ -296,6 +299,79 @@ describe('Helper Utilities', () => {
     });
   });
 
+  describe('isValidEmail hardening', () => {
+    it('should reject header/recipient injection characters', () => {
+      expect(isValidEmail('a<b@example.com')).toBe(false);
+      expect(isValidEmail('a>b@example.com')).toBe(false);
+      expect(isValidEmail('"a"@example.com')).toBe(false);
+      expect(isValidEmail('a@example.com,b@example.com')).toBe(false);
+      expect(isValidEmail('a@example.com\r\nBcc: x@y.com')).toBe(false);
+      expect(isValidEmail('a b@example.com')).toBe(false);
+      expect(isValidEmail('a\tb@example.com')).toBe(false);
+    });
+
+    it('should reject non-strings and overlong values', () => {
+      expect(isValidEmail({ not: '' } as unknown as string)).toBe(false);
+      expect(isValidEmail(undefined as unknown as string)).toBe(false);
+      expect(isValidEmail('a'.repeat(250) + '@example.com')).toBe(false);
+    });
+  });
+
+  describe('reserved local parts', () => {
+    it('should reject reserved names case-insensitively', () => {
+      for (const name of ['admin', 'ADMIN', 'postmaster', 'Abuse', 'no-reply', 'mailer-daemon', 'ssl-admin', 'webmaster', 'help', 'info']) {
+        expect(isValidCustomAlias(name)).toBe(false);
+      }
+    });
+
+    it('should only match exactly', () => {
+      expect(isValidCustomAlias('admin2')).toBe(true);
+      expect(isValidCustomAlias('myhelp')).toBe(true);
+    });
+
+    it('should still reject the r prefix in any case', () => {
+      expect(isValidCustomAlias('Ralias')).toBe(false);
+    });
+
+    it('should reject non-strings', () => {
+      expect(isValidCustomAlias(['admin'] as unknown as string)).toBe(false);
+    });
+  });
+
+  describe('parseExpiresInDays', () => {
+    it('should accept null/undefined and integers in range', () => {
+      expect(parseExpiresInDays(undefined)).toEqual({ valid: true, days: null });
+      expect(parseExpiresInDays(null)).toEqual({ valid: true, days: null });
+      expect(parseExpiresInDays(1)).toEqual({ valid: true, days: 1 });
+      expect(parseExpiresInDays(365)).toEqual({ valid: true, days: 365 });
+    });
+
+    it('should reject strings, fractions and out-of-range values', () => {
+      for (const v of ['7', 1.5, 0, -1, 366, 1e9, NaN, {}, true]) {
+        expect(parseExpiresInDays(v).valid).toBe(false);
+      }
+    });
+  });
+
+  describe('parsePagination', () => {
+    it('should clamp and fall back on NaN', () => {
+      expect(parsePagination('abc', 'xyz')).toEqual({ page: 1, limit: 20, skip: 0 });
+      expect(parsePagination('0', '0')).toEqual({ page: 1, limit: 1, skip: 0 });
+      expect(parsePagination('3', '100000')).toEqual({ page: 3, limit: 100, skip: 200 });
+      expect(parsePagination(undefined, undefined, 50)).toEqual({ page: 1, limit: 50, skip: 0 });
+    });
+  });
+
+  describe('validateOptionalText', () => {
+    it('should validate type and length', () => {
+      expect(validateOptionalText(undefined, 'label', 5)).toBeNull();
+      expect(validateOptionalText(null, 'label', 5)).toBeNull();
+      expect(validateOptionalText('abc', 'label', 5)).toBeNull();
+      expect(validateOptionalText('abcdef', 'label', 5)).not.toBeNull();
+      expect(validateOptionalText({ a: 1 }, 'label', 5)).not.toBeNull();
+    });
+  });
+
   describe('isValidCustomAlias', () => {
     it('should return true for valid custom aliases', () => {
       expect(isValidCustomAlias('myalias')).toBe(true);
@@ -391,7 +467,7 @@ describe('Helper Utilities', () => {
     describe('createManagementUrl', () => {
       it('should create management URL with token', () => {
         const url = createManagementUrl('abc123');
-        expect(url).toBe('https://test.example.com/manage/abc123');
+        expect(url).toBe('https://test.example.com/#manage?token=abc123');
       });
     });
 
